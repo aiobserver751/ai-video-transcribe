@@ -2,6 +2,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
+import { logger } from './logger';
 
 const execAsync = promisify(exec);
 const readFileAsync = promisify(fs.readFile);
@@ -20,9 +21,9 @@ async function getFileSizeMB(filePath: string): Promise<number> {
 async function compressAudio(audioPath: string): Promise<boolean> {
   const startTime = Date.now();
   try {
-    console.log('Starting audio compression...');
+    logger.info('Starting audio compression...');
     const originalSize = await getFileSizeMB(audioPath);
-    console.log(`Original audio size: ${originalSize.toFixed(2)}MB`);
+    logger.info(`Original audio size: ${originalSize.toFixed(2)}MB`);
     
     const compressedPath = `${audioPath}_compressed.mp3`;
     // Compress audio while maintaining reasonable quality
@@ -31,22 +32,22 @@ async function compressAudio(audioPath: string): Promise<boolean> {
     // Check if compression worked
     const compressedSize = await getFileSizeMB(compressedPath);
     const reductionPercent = ((originalSize - compressedSize) / originalSize * 100).toFixed(1);
-    console.log(`Compressed size: ${compressedSize.toFixed(2)}MB (${reductionPercent}% reduction)`);
+    logger.info(`Compressed size: ${compressedSize.toFixed(2)}MB (${reductionPercent}% reduction)`);
     
     if (compressedSize <= MAX_FILE_SIZE_MB) {
       // Use compressed file
       await unlinkAsync(audioPath);
       fs.renameSync(compressedPath, audioPath);
-      console.log(`Compression successful. Time taken: ${(Date.now() - startTime) / 1000}s`);
+      logger.info(`Compression successful. Time taken: ${(Date.now() - startTime) / 1000}s`);
       return true;
     } else {
       // If compression didn't help enough, clean up
       await unlinkAsync(compressedPath);
-      console.log(`Compression not effective. Time taken: ${(Date.now() - startTime) / 1000}s`);
+      logger.info(`Compression not effective. Time taken: ${(Date.now() - startTime) / 1000}s`);
       return false;
     }
   } catch (error) {
-    console.error('Compression error:', error);
+    logger.error('Compression error:', error);
     return false;
   }
 }
@@ -55,7 +56,7 @@ async function transcribeChunk(chunkPath: string): Promise<string> {
   const startTime = Date.now();
   try {
     const chunkSize = await getFileSizeMB(chunkPath);
-    console.log(`Starting transcription for chunk: ${path.basename(chunkPath)} (${chunkSize.toFixed(2)}MB)`);
+    logger.info(`Starting transcription for chunk: ${path.basename(chunkPath)} (${chunkSize.toFixed(2)}MB)`);
     const command = `whisper "${chunkPath}" --model base --language English --output_dir "${path.dirname(chunkPath)}"`;
     await execAsync(command);
     
@@ -76,14 +77,14 @@ async function transcribeChunk(chunkPath: string): Promise<string> {
         await unlinkAsync(file);
       } catch (error) {
         // Ignore errors if file doesn't exist
-        console.log(`File ${file} not found for cleanup: ${error}`);
+        logger.debug(`File ${file} not found for cleanup: ${error}`);
       }
     }
     
-    console.log(`Chunk transcription completed. Time taken: ${(Date.now() - startTime) / 1000}s`);
+    logger.info(`Chunk transcription completed. Time taken: ${(Date.now() - startTime) / 1000}s`);
     return transcription;
   } catch (error) {
-    console.error('Chunk transcription error:', error);
+    logger.error('Chunk transcription error:', error);
     throw new Error('Failed to transcribe chunk');
   }
 }
@@ -103,7 +104,7 @@ function mergeTranscriptions(transcriptions: string[]): string {
     return text;
   }).join(' ');
   
-  console.log(`Merged ${transcriptions.length} transcriptions. Time taken: ${(Date.now() - startTime) / 1000}s`);
+  logger.info(`Merged ${transcriptions.length} transcriptions. Time taken: ${(Date.now() - startTime) / 1000}s`);
   return result;
 }
 
@@ -114,31 +115,31 @@ export async function transcribeAudio(audioPath: string): Promise<string> {
     let fileSizeInMB = await getFileSizeMB(audioPath);
     let wasCompressed = false;
     
-    console.log(`\n=== Processing Audio File ===`);
-    console.log(`Original audio file size: ${fileSizeInMB.toFixed(2)}MB`);
+    logger.info(`\n=== Processing Audio File ===`);
+    logger.info(`Original audio file size: ${fileSizeInMB.toFixed(2)}MB`);
 
     // Try compression if file is slightly over limit
     if (fileSizeInMB > MAX_FILE_SIZE_MB && fileSizeInMB < COMPRESSION_THRESHOLD_MB) {
-      console.log('\n=== Attempting Compression ===');
+      logger.info('\n=== Attempting Compression ===');
       const compressed = await compressAudio(audioPath);
       if (compressed) {
         // Compression was successful, get new file size
         fileSizeInMB = await getFileSizeMB(audioPath);
         wasCompressed = true;
-        console.log(`\n=== Processing Compressed File ===`);
-        console.log(`Compressed file size: ${fileSizeInMB.toFixed(2)}MB`);
+        logger.info(`\n=== Processing Compressed File ===`);
+        logger.info(`Compressed file size: ${fileSizeInMB.toFixed(2)}MB`);
       }
     }
 
     // Check if file is under the limit after possible compression
     if (fileSizeInMB <= MAX_FILE_SIZE_MB) {
       // If file is within size limit, transcribe directly
-      console.log(`\n=== Processing ${wasCompressed ? 'Compressed' : 'Single'} File ===`);
+      logger.info(`\n=== Processing ${wasCompressed ? 'Compressed' : 'Single'} File ===`);
       return await transcribeChunk(audioPath);
     }
 
     // If file is still too large, proceed with chunking
-    console.log('\n=== Starting Chunking Process ===');
+    logger.info('\n=== Starting Chunking Process ===');
     // Create chunks directory
     const timestamp = Date.now();
     const chunksDir = path.join(process.cwd(), 'tmp', `chunks_${timestamp}`);
@@ -146,7 +147,7 @@ export async function transcribeAudio(audioPath: string): Promise<string> {
 
     // Split on silence, minimum 1 second of silence
     const chunkStartTime = Date.now();
-    console.log('Splitting audio into chunks...');
+    logger.info('Splitting audio into chunks...');
     // First detect silence points
     const silenceDetectCmd = `ffmpeg -i "${audioPath}" -af silencedetect=noise=-30dB:d=1 -f null - 2>&1`;
     const silenceOutput = await execAsync(silenceDetectCmd);
@@ -169,12 +170,12 @@ export async function transcribeAudio(audioPath: string): Promise<string> {
     const segmentStr = segmentTimes.join(',');
     await execAsync(`ffmpeg -i "${audioPath}" -f segment -segment_times "${segmentStr}" -c copy "${chunksDir}/chunk_%03d.mp3"`);
     
-    console.log(`Chunking completed. Time taken: ${(Date.now() - chunkStartTime) / 1000}s`);
+    logger.info(`Chunking completed. Time taken: ${(Date.now() - chunkStartTime) / 1000}s`);
 
     // Process chunks
     const chunks = fs.readdirSync(chunksDir);
-    console.log(`\n=== Chunk Information ===`);
-    console.log(`Total chunks created: ${chunks.length}`);
+    logger.info(`\n=== Chunk Information ===`);
+    logger.info(`Total chunks created: ${chunks.length}`);
     
     // Log size of each chunk
     let totalChunkSize = 0;
@@ -182,11 +183,11 @@ export async function transcribeAudio(audioPath: string): Promise<string> {
       const chunkPath = path.join(chunksDir, chunk);
       const chunkSize = await getFileSizeMB(chunkPath);
       totalChunkSize += chunkSize;
-      console.log(`Chunk ${chunk}: ${chunkSize.toFixed(2)}MB`);
+      logger.info(`Chunk ${chunk}: ${chunkSize.toFixed(2)}MB`);
     }
-    console.log(`Total chunk size: ${totalChunkSize.toFixed(2)}MB`);
+    logger.info(`Total chunk size: ${totalChunkSize.toFixed(2)}MB`);
     
-    console.log('\n=== Starting Transcription ===');
+    logger.info('\n=== Starting Transcription ===');
     const transcriptions = [];
 
     for (const chunk of chunks) {
@@ -200,10 +201,10 @@ export async function transcribeAudio(audioPath: string): Promise<string> {
 
     return mergeTranscriptions(transcriptions);
   } catch (error) {
-    console.error('Transcription error:', error);
+    logger.error('Transcription error:', error);
     throw new Error('Failed to transcribe audio');
   } finally {
-    console.log(`\n=== Total Processing Time ===`);
-    console.log(`Total time: ${(Date.now() - totalStartTime) / 1000}s`);
+    logger.info(`\n=== Total Processing Time ===`);
+    logger.info(`Total time: ${(Date.now() - totalStartTime) / 1000}s`);
   }
 } 
