@@ -11,8 +11,17 @@ This application provides a video transcription service with two quality options
    ```
    npm install
    ```
-3. Create a `.env.local` file in the root directory with your Groq API key and rate limit configuration:
+3. Create a `.env` file in the root directory with your configuration:
    ```
+   # Redis configuration
+   REDIS_HOST=localhost
+   REDIS_PORT=6379
+   REDIS_PASSWORD=
+
+   # Queue configuration
+   ENABLE_QUEUE_WORKERS=true
+   TRANSCRIPTION_CONCURRENCY=3
+
    # API Keys
    GROQ_API_KEY=your_api_key_here
    
@@ -66,10 +75,10 @@ API_KEY: your_api_key_here
 
 ```json
 {
-  "transcription": "The transcribed text...",
-  "quality": "premium" | "standard",
-  "status_code": 200,
-  "status_message": "Success"
+  "status_code": "202",
+  "status_message": "accepted",
+  "job_id": "tr_k7g83js9dl4",
+  "quality": "premium"
 }
 ```
 
@@ -150,3 +159,164 @@ The tracking system helps prevent rate limit errors by:
 3. Learning from rate limit responses to keep accurate usage tracking
 
 You can disable the automatic fallback by setting `fallbackOnRateLimit: false` in your request.
+
+## Job Queue System
+
+The application now includes a robust job queue system using BullMQ and Redis for asynchronous processing of transcription jobs. This enables:
+
+1. **Reliable processing of multiple concurrent jobs**: Each transcription request is processed as a background job
+2. **Job prioritization based on user tier**: Premium requests get higher priority in the queue
+3. **Automatic retries for failed jobs**: Failed jobs are automatically retried with exponential backoff
+4. **Detailed progress tracking**: Track the status and progress of each job during processing
+
+### Setup Redis
+
+For the queue system to work, you need Redis installed. You can:
+
+1. Install Redis locally (see [Redis documentation](https://redis.io/docs/getting-started/))
+2. Use a Redis Docker container:
+   ```bash
+   docker run -p 6379:6379 redis
+   ```
+3. Use a managed Redis service like Redis Labs, AWS ElastiCache, etc.
+
+Configure your Redis connection in the `.env` file:
+```
+# Redis configuration
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+# Queue configuration
+ENABLE_QUEUE_WORKERS=true
+TRANSCRIPTION_CONCURRENCY=3
+```
+
+### Using the Queue API
+
+The application provides new API endpoints for queued transcription:
+
+```
+POST /api/transcribe/queue
+```
+
+#### Required Headers:
+
+```
+Content-Type: application/json
+API_KEY: your_api_key_here
+```
+
+#### Request Parameters:
+Same as the direct transcription endpoint, with the addition of:
+
+```json
+{
+  "url": "https://www.youtube.com/watch?v=example",
+  "quality": "standard" | "premium",
+  "fallbackOnRateLimit": true | false,
+  "callback_url": "https://your-server.com/webhook"
+}
+```
+
+- `callback_url`: (Optional) A URL that will receive a POST request when the job completes
+
+#### Response:
+
+```json
+{
+  "status_code": "202",
+  "status_message": "accepted",
+  "job_id": "tr_k7g83js9dl4",
+  "quality": "premium"
+}
+```
+
+### Callback Notifications
+
+When a job completes, if a `callback_url` was provided, the system will make a POST request to that URL with the following payload:
+
+#### Success Callback:
+
+```json
+{
+  "status_code": 200,
+  "status_message": "success",
+  "job_id": "tr_k7g83js9dl4",    
+  "quality": "premium",
+  "response": {
+    "text": "The transcribed text..."    
+  }
+}
+```
+
+#### Error Callback:
+
+```json
+{
+  "job_id": "tr_k7g83js9dl4",
+  "status_code": 500,
+  "status_message": "error",
+  "quality": "premium",
+  "error": "Error message"
+}
+```
+
+The callback system eliminates the need for polling the job status API, as your server will be notified automatically when the job completes. If the callback fails, you can still check the job status using the polling endpoint.
+
+### Checking Job Status
+
+To check the status of a job, use:
+
+```
+GET /api/transcribe/queue?jobId=transcription-1234567890-123
+```
+
+#### Response (In Progress):
+
+```json
+{
+  "status": "active",
+  "progress": {
+    "percentage": 40,
+    "stage": "transcribing",
+    "message": "Transcribing audio"
+  },
+  "jobId": "transcription-1234567890-123",
+  "status_code": 102,
+  "status_message": "Processing"
+}
+```
+
+#### Response (Completed):
+
+```json
+{
+  "transcription": "The transcribed text...",
+  "quality": "premium" | "standard",
+  "jobId": "transcription-1234567890-123",
+  "status_code": 200,
+  "status_message": "OK"
+}
+```
+
+#### Response (Error):
+
+```json
+{
+  "error": "Transcription failed",
+  "details": "Error details",
+  "jobId": "transcription-1234567890-123",
+  "status_code": 500,
+  "status_message": "Internal Server Error"
+}
+```
+
+### Queue Worker Initialization
+
+The queue workers are automatically initialized:
+- In production environments
+- When `ENABLE_QUEUE_WORKERS=true` is set in your `.env` file
+
+You can manually initialize the workers by calling:
+```

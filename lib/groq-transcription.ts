@@ -1,11 +1,12 @@
-import fs from 'fs';
-import path from 'path';
-import { promisify } from 'util';
+import { logger } from './logger.ts';
+import { rateLimitTracker } from './rate-limit-tracker.ts';
 import { exec } from 'child_process';
+import { promisify } from 'util';
+import path from 'path';
+import fs from 'fs';
+import { writeFile } from 'fs/promises';
 import axios from 'axios';
 import FormData from 'form-data';
-import { rateLimitTracker } from './rate-limit-tracker';
-import { logger } from './logger';
 
 const execAsync = promisify(exec);
 const statAsync = promisify(fs.stat);
@@ -54,6 +55,20 @@ function mergeTranscriptions(transcriptions: string[]): string {
   }).join(' ');
   
   return result;
+}
+
+// Helper function to save transcription text to a file
+async function saveTranscriptionToFile(text: string, baseFilename: string): Promise<string> {
+  const outputDir = path.join(process.cwd(), 'tmp');
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+  // Use a unique name, perhaps incorporating the base name and timestamp
+  const outputTxtFilename = `${path.basename(baseFilename, path.extname(baseFilename))}_groq_${Date.now()}.txt`;
+  const outputPath = path.join(outputDir, outputTxtFilename);
+  await writeFile(outputPath, text, 'utf-8');
+  logger.info(`Groq transcription saved to: ${outputPath}`);
+  return outputPath;
 }
 
 async function transcribeChunkWithGroq(chunkPath: string): Promise<string> {
@@ -122,13 +137,12 @@ async function transcribeChunkWithGroq(chunkPath: string): Promise<string> {
         
         logger.info(`Groq transcription completed. Time taken: ${(Date.now() - startTime) / 1000}s`);
         
-        if (typeof response.data === 'string') {
-          return response.data;
-        } else if (response.data && response.data.text) {
-          return response.data.text;
+        const transcriptionText = (typeof response.data === 'string') ? response.data : response.data?.text;
+        if (typeof transcriptionText === 'string') {
+          return transcriptionText;
         } else {
           logger.warn('Unexpected response format:', response.data);
-          return 'Error: Unexpected response format from Groq API';
+          throw new Error('Unexpected response format from Groq API');
         }
       } catch (axiosError: unknown) {
         if (axios.isAxiosError(axiosError)) {
@@ -220,7 +234,8 @@ export async function transcribeAudioWithGroq(audioPath: string): Promise<string
     if (fileSizeInMB <= MAX_FILE_SIZE_MB) {
       // If file is within size limit, transcribe directly
       logger.info(`\n=== Processing Single File with Groq ===`);
-      return await transcribeChunkWithGroq(audioPath);
+      const transcriptionText = await transcribeChunkWithGroq(audioPath);
+      return await saveTranscriptionToFile(transcriptionText, audioPath);
     }
 
     // If file is too large, proceed with chunking
@@ -294,7 +309,7 @@ export async function transcribeAudioWithGroq(audioPath: string): Promise<string
       logger.info(`Total chunk size: ${totalChunkSize.toFixed(2)}MB`);
       
       logger.info('\n=== Starting Groq Transcription ===');
-      const transcriptions = [];
+      const transcriptions: string[] = [];
   
       for (const chunk of chunks) {
         const chunkPath = path.join(chunksDir, chunk);
@@ -312,7 +327,10 @@ export async function transcribeAudioWithGroq(audioPath: string): Promise<string
       
       // Merge results
       logger.info('Merging transcription results...');
-      return mergeTranscriptions(transcriptions);
+      const mergedText = mergeTranscriptions(transcriptions);
+
+      // Save the final merged text and return the path
+      return await saveTranscriptionToFile(mergedText, audioPath);
     } catch (chunkingError) {
       logger.error('Error during chunking:', chunkingError);
       

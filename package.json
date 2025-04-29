@@ -2,20 +2,31 @@
   "name": "ai-video-transcribe",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "workers": "node --loader ts-node/esm scripts/init-workers.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node --loader ts-node/esm scripts/migrate.ts",
+    "db:studio": "drizzle-kit studio",
+    "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.0.0",
     "@types/express": "^5.0.1",
     "axios": "^1.8.4",
+    "bullmq": "^5.1.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dotenv": "^16.5.0",
+    "drizzle-orm": "^0.43.1",
     "express": "^5.1.0",
     "form-data": "^4.0.2",
     "groq": "^3.86.1",
+    "ioredis": "^5.3.2",
     "lucide-react": "^0.487.0",
     "next": "14.2.23",
     "react": "^18",
@@ -27,10 +38,12 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "drizzle-kit": "^0.31.0",
     "eslint": "^8",
     "eslint-config-next": "14.2.23",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
+    "ts-node": "^10.9.2",
     "typescript": "^5"
   }
 }

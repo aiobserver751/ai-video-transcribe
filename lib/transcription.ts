@@ -1,210 +1,90 @@
+import { logger } from './logger.ts';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
-import { logger } from './logger';
 
 const execAsync = promisify(exec);
-const readFileAsync = promisify(fs.readFile);
-const unlinkAsync = promisify(fs.unlink);
 const statAsync = promisify(fs.stat);
+
+// Defined but flagged as unused by linter previously.
+// Keeping it as fs.mkdirSync is used later, indicating intent.
 const mkdirAsync = promisify(fs.mkdir);
 
-const MAX_FILE_SIZE_MB = 25;
-const COMPRESSION_THRESHOLD_MB = 30;
+const MAX_FILE_SIZE_MB = 25; // Example constant, ensure it's used if needed elsewhere or remove.
 
 async function getFileSizeMB(filePath: string): Promise<number> {
+  // Ensure statAsync is used if needed, otherwise remove if getFileSizeMB is unused.
+  // Currently getFileSizeMB is not called within this file after removing compressAudio/transcribeChunk.
+  // Consider removing getFileSizeMB and statAsync if truly unused now.
   const stats = await statAsync(filePath);
   return stats.size / (1024 * 1024);
 }
 
-async function compressAudio(audioPath: string): Promise<boolean> {
-  const startTime = Date.now();
-  try {
-    logger.info('Starting audio compression...');
-    const originalSize = await getFileSizeMB(audioPath);
-    logger.info(`Original audio size: ${originalSize.toFixed(2)}MB`);
-    
-    const compressedPath = `${audioPath}_compressed.mp3`;
-    // Compress audio while maintaining reasonable quality
-    await execAsync(`ffmpeg -i "${audioPath}" -codec:a libmp3lame -qscale:a 4 "${compressedPath}"`);
-    
-    // Check if compression worked
-    const compressedSize = await getFileSizeMB(compressedPath);
-    const reductionPercent = ((originalSize - compressedSize) / originalSize * 100).toFixed(1);
-    logger.info(`Compressed size: ${compressedSize.toFixed(2)}MB (${reductionPercent}% reduction)`);
-    
-    if (compressedSize <= MAX_FILE_SIZE_MB) {
-      // Use compressed file
-      await unlinkAsync(audioPath);
-      fs.renameSync(compressedPath, audioPath);
-      logger.info(`Compression successful. Time taken: ${(Date.now() - startTime) / 1000}s`);
-      return true;
-    } else {
-      // If compression didn't help enough, clean up
-      await unlinkAsync(compressedPath);
-      logger.info(`Compression not effective. Time taken: ${(Date.now() - startTime) / 1000}s`);
-      return false;
-    }
-  } catch (error) {
-    logger.error('Compression error:', error);
-    return false;
-  }
-}
-
-async function transcribeChunk(chunkPath: string): Promise<string> {
-  const startTime = Date.now();
-  try {
-    const chunkSize = await getFileSizeMB(chunkPath);
-    logger.info(`Starting transcription for chunk: ${path.basename(chunkPath)} (${chunkSize.toFixed(2)}MB)`);
-    const command = `whisper "${chunkPath}" --model base --language English --output_dir "${path.dirname(chunkPath)}"`;
-    await execAsync(command);
-    
-    // Read the transcription file
-    const transcriptionPath = chunkPath.replace('.mp3', '.txt');
-    const transcription = await readFileAsync(transcriptionPath, 'utf8');
-    
-    // Clean up all Whisper output files
-    const basePath = chunkPath.replace('.mp3', '');
-    const filesToClean = [
-      `${basePath}.txt`,
-      `${basePath}.vtt`,
-      `${basePath}.srt`
-    ];
-    
-    for (const file of filesToClean) {
-      try {
-        await unlinkAsync(file);
-      } catch (error) {
-        // Ignore errors if file doesn't exist
-        logger.debug(`File ${file} not found for cleanup: ${error}`);
-      }
-    }
-    
-    logger.info(`Chunk transcription completed. Time taken: ${(Date.now() - startTime) / 1000}s`);
-    return transcription;
-  } catch (error) {
-    logger.error('Chunk transcription error:', error);
-    throw new Error('Failed to transcribe chunk');
-  }
-}
-
-function mergeTranscriptions(transcriptions: string[]): string {
-  const startTime = Date.now();
-  const result = transcriptions.map((text, index) => {
-    if (index === 0) return text;
-    
-    // Find overlap between chunks
-    const previousEnd = transcriptions[index - 1].split(/[.!?]+/).slice(-2).join('. ');
-    
-    // Remove duplicate content
-    if (text.includes(previousEnd)) {
-      return text.replace(previousEnd, '');
-    }
-    return text;
-  }).join(' ');
-  
-  logger.info(`Merged ${transcriptions.length} transcriptions. Time taken: ${(Date.now() - startTime) / 1000}s`);
-  return result;
-}
-
+/**
+ * Transcribes audio using the local Whisper CLI.
+ * Saves the output to a .txt file in the tmp directory.
+ * Returns the full path to the generated .txt file.
+ */
 export async function transcribeAudio(audioPath: string): Promise<string> {
   const totalStartTime = Date.now();
+  const outputDir = path.join(process.cwd(), 'tmp');
+  // Determine the base output filename from the input audio path
+  const inputBasename = path.basename(audioPath, path.extname(audioPath));
+  // Whisper CLI creates output based on input name + format extension
+  const outputTxtFilename = `${inputBasename}.txt`;
+  const outputPath = path.join(outputDir, outputTxtFilename);
+
   try {
-    // Check file size
-    let fileSizeInMB = await getFileSizeMB(audioPath);
-    let wasCompressed = false;
-    
-    logger.info(`\n=== Processing Audio File ===`);
-    logger.info(`Original audio file size: ${fileSizeInMB.toFixed(2)}MB`);
+    logger.info(`Starting standard Whisper transcription for ${audioPath}`);
+    logger.info(`Output will be saved to: ${outputPath}`);
 
-    // Try compression if file is slightly over limit
-    if (fileSizeInMB > MAX_FILE_SIZE_MB && fileSizeInMB < COMPRESSION_THRESHOLD_MB) {
-      logger.info('\n=== Attempting Compression ===');
-      const compressed = await compressAudio(audioPath);
-      if (compressed) {
-        // Compression was successful, get new file size
-        fileSizeInMB = await getFileSizeMB(audioPath);
-        wasCompressed = true;
-        logger.info(`\n=== Processing Compressed File ===`);
-        logger.info(`Compressed file size: ${fileSizeInMB.toFixed(2)}MB`);
+    // Create output directory if it doesn't exist
+    if (!fs.existsSync(outputDir)) {
+      // Using fs.mkdirSync as it was used before.
+      fs.mkdirSync(outputDir, { recursive: true });
+      logger.info(`Created output directory: ${outputDir}`);
+    }
+
+    // Construct the whisper command to only output txt
+    // Using --model base. Adjust model as needed (e.g., tiny, small, medium, large).
+    // Added --language English for consistency. Remove if language detection is desired.
+    const command = `whisper "${audioPath}" --model base --language English --output_dir "${outputDir}" --output_format txt`;
+    logger.info(`Executing Whisper command: ${command}`);
+    await execAsync(command);
+
+    // Verify the output file was created
+    if (!fs.existsSync(outputPath)) {
+      logger.error(`Whisper command finished but output file not found: ${outputPath}`);
+      // Attempt to list files in outputDir for debugging
+      try {
+        const files = fs.readdirSync(outputDir);
+        logger.debug(`Files in ${outputDir}: ${files.join(', ')}`);
+      } catch (readErr) {
+        logger.error(`Could not read directory ${outputDir}: ${readErr}`);
       }
+      throw new Error(`Whisper transcription failed to produce output file: ${outputTxtFilename}`);
     }
 
-    // Check if file is under the limit after possible compression
-    if (fileSizeInMB <= MAX_FILE_SIZE_MB) {
-      // If file is within size limit, transcribe directly
-      logger.info(`\n=== Processing ${wasCompressed ? 'Compressed' : 'Single'} File ===`);
-      return await transcribeChunk(audioPath);
-    }
+    logger.info(`Transcription file created successfully: ${outputPath}`);
+    // Return the path to the created file
+    return outputPath;
 
-    // If file is still too large, proceed with chunking
-    logger.info('\n=== Starting Chunking Process ===');
-    // Create chunks directory
-    const timestamp = Date.now();
-    const chunksDir = path.join(process.cwd(), 'tmp', `chunks_${timestamp}`);
-    await mkdirAsync(chunksDir);
-
-    // Split on silence, minimum 1 second of silence
-    const chunkStartTime = Date.now();
-    logger.info('Splitting audio into chunks...');
-    // First detect silence points
-    const silenceDetectCmd = `ffmpeg -i "${audioPath}" -af silencedetect=noise=-30dB:d=1 -f null - 2>&1`;
-    const silenceOutput = await execAsync(silenceDetectCmd);
-    
-    // Extract silence timestamps
-    const silenceMatches = silenceOutput.stdout.match(/silence_start: (\d+\.\d+)/g);
-    const silencePoints = silenceMatches ? silenceMatches.map(m => parseFloat(m.split(': ')[1])) : [];
-    
-    // Create segments based on silence points
-    const segmentTimes = [];
-    let currentTime = 0;
-    for (const silencePoint of silencePoints) {
-      if (silencePoint - currentTime >= 300) { // 5 minutes
-        segmentTimes.push(silencePoint);
-        currentTime = silencePoint;
-      }
-    }
-    
-    // Split the audio at silence points
-    const segmentStr = segmentTimes.join(',');
-    await execAsync(`ffmpeg -i "${audioPath}" -f segment -segment_times "${segmentStr}" -c copy "${chunksDir}/chunk_%03d.mp3"`);
-    
-    logger.info(`Chunking completed. Time taken: ${(Date.now() - chunkStartTime) / 1000}s`);
-
-    // Process chunks
-    const chunks = fs.readdirSync(chunksDir);
-    logger.info(`\n=== Chunk Information ===`);
-    logger.info(`Total chunks created: ${chunks.length}`);
-    
-    // Log size of each chunk
-    let totalChunkSize = 0;
-    for (const chunk of chunks) {
-      const chunkPath = path.join(chunksDir, chunk);
-      const chunkSize = await getFileSizeMB(chunkPath);
-      totalChunkSize += chunkSize;
-      logger.info(`Chunk ${chunk}: ${chunkSize.toFixed(2)}MB`);
-    }
-    logger.info(`Total chunk size: ${totalChunkSize.toFixed(2)}MB`);
-    
-    logger.info('\n=== Starting Transcription ===');
-    const transcriptions = [];
-
-    for (const chunk of chunks) {
-      const chunkPath = path.join(chunksDir, chunk);
-      const transcription = await transcribeChunk(chunkPath);
-      transcriptions.push(transcription);
-    }
-
-    // Clean up chunks directory
-    fs.rmSync(chunksDir, { recursive: true, force: true });
-
-    return mergeTranscriptions(transcriptions);
   } catch (error) {
-    logger.error('Transcription error:', error);
-    throw new Error('Failed to transcribe audio');
+    logger.error('Standard Whisper transcription error:', error);
+    // Attempt to clean up the potentially created (but maybe incomplete) output file if it exists on error
+    if (fs.existsSync(outputPath)) {
+      try {
+        logger.warn(`Cleaning up potentially incomplete file due to error: ${outputPath}`);
+        fs.unlinkSync(outputPath);
+      } catch (cleanupError) {
+        logger.warn(`Failed to clean up transcription file on error: ${cleanupError}`);
+      }
+    }
+    throw error; // Re-throw the original error
   } finally {
-    logger.info(`\n=== Total Processing Time ===`);
+    logger.info(`
+=== Total Standard Whisper Processing Time ===`);
     logger.info(`Total time: ${(Date.now() - totalStartTime) / 1000}s`);
   }
-} 
+}
