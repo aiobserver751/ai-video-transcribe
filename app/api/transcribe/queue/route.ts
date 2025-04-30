@@ -129,11 +129,11 @@ export async function POST(request: NextRequest) {
       logger.info(`Inserting job record into database: ${jobId}`);
       await db.insert(transcriptionJobs).values({
         id: jobId,
-        // @ts-expect-error - Linter seems confused about userId type despite schema
         userId: authenticatedUserId, 
         videoUrl: url,
         quality: requestedQuality,
         status: 'pending',
+        origin: 'EXTERNAL',
         // transcriptionFileUrl will be updated later
       });
       logger.info(`Successfully inserted job record: ${jobId}`);

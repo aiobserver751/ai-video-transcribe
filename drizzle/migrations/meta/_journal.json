@@ -5,15 +5,22 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1745861946928,
-      "tag": "0000_mighty_black_crow",
+      "when": 1746010000095,
+      "tag": "0000_dark_revanche",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "7",
-      "when": 1745869330588,
-      "tag": "0001_lush_zaran",
+      "when": 1746027005809,
+      "tag": "0001_rapid_moira_mactaggert",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1746037678684,
+      "tag": "0002_foamy_virginia_dare",
       "breakpoints": true
     }
   ]

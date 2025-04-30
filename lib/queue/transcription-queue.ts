@@ -306,17 +306,19 @@ export function startTranscriptionWorker(concurrency = 5) {
 
         // === Update DB Status to Completed ===
         try {
-          logger.info(`Updating job ${jobId} status to 'completed' and storing URL in DB`);
+          logger.info(`Updating job ${jobId} status to 'completed' in DB`);
           await db.update(transcriptionJobs)
             .set({
               status: 'completed',
-              transcriptionFileUrl: finalTranscriptionUrl, // Store the final URL (file or signed)
-              updatedAt: new Date()
+              transcriptionFileUrl: finalTranscriptionUrl, // Saving placeholder URL
+              transcriptionText: transcriptionText, // <<< Added: Save the actual text
+              updatedAt: new Date(),
+              statusMessage: null, // Clear any previous error message
             })
             .where(eq(transcriptionJobs.id, jobId));
         } catch (dbError) {
           logger.error(`Failed to update job ${jobId} status to 'completed' in DB:`, dbError);
-          // Log and continue, the primary result is still returned/callback sent
+          // Consider how to handle this - job might be left in processing state?
         }
 
         // Prepare result
