@@ -9,6 +9,7 @@ export const jobStatusEnum = pgEnum('job_status', ['pending', 'processing', 'com
 export const qualityEnum = pgEnum('quality', ['standard', 'premium']);
 // Define an enum for job origin
 export const jobOriginEnum = pgEnum('job_origin', ['INTERNAL', 'EXTERNAL']); // Enum for job origin
+export const userTypeEnum = pgEnum('user_type', ['normal', 'google']); // <-- Add user type enum
 
 // --- Users Table (Updated for Auth.js) ---
 export const users = pgTable('users', {
@@ -18,6 +19,11 @@ export const users = pgTable('users', {
   email: text("email").unique().notNull(),
   emailVerified: timestamp("emailVerified", { mode: "date", withTimezone: true }),
   image: text("image"),
+  type: userTypeEnum('type'), // <-- Add user type field (nullable for now)
+  passwordHash: text("password_hash"), // <-- Corrected: text is nullable by default
+  // description: text("description"), // Removed
+  // location: text("location"),     // Removed
+  // link: text("link"),           // Removed
   // createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(), // Use existing or let adapter handle? Let's remove for now.
 });
 

@@ -1,4 +1,7 @@
+'use client';
+
 import { useState } from "react";
+import { useRouter } from 'next/navigation';
 import {
   Table,
   TableBody,
@@ -24,10 +27,11 @@ const ITEMS_PER_PAGE = 25; // Number of jobs per page
 interface JobsListProps {
   jobs: TranscriptionJob[];
   onViewDetails: (jobId: string) => void;
-  setActiveTab?: (tab: string) => void;
 }
 
-const JobsList = ({ jobs, onViewDetails, setActiveTab }: JobsListProps) => {
+const JobsList = ({ jobs, onViewDetails }: JobsListProps) => {
+  const router = useRouter();
+  
   // State for filters
   const [typeFilter, setTypeFilter] = useState('all'); // 'all', 'normal', 'api'
   const [createdFilter, setCreatedFilter] = useState('all'); // 'all', '7', '30'
@@ -216,7 +220,7 @@ const JobsList = ({ jobs, onViewDetails, setActiveTab }: JobsListProps) => {
             <p className="text-gray-500 dark:text-gray-400 mt-1 mb-4">
               Try adjusting your filters or submit a new transcription.
             </p>
-            <Button onClick={() => setActiveTab?.('new')}>
+            <Button onClick={() => router.push('/transcribe')}>
               Submit New Transcription
             </Button>
           </div>

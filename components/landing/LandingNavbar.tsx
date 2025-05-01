@@ -1,24 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { signIn } from "next-auth/react";
+import Link from 'next/link';
 
 const LandingNavbar = () => {
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-
-  const handleLogin = async () => {
-    setIsLoggingIn(true);
-    try {
-      await signIn("google", { 
-        callbackUrl: "/dashboard", 
-      });
-    } catch (error) {
-      console.error("Error during Google sign-in:", error);
-      setIsLoggingIn(false);
-    }
-  };
-
   return (
     <header className="border-b border-border">
       <div className="container flex h-16 items-center justify-between px-4 md:px-6">
@@ -51,16 +36,11 @@ const LandingNavbar = () => {
           </a>
         </nav>
         <div className="flex items-center gap-4">
-          <Button
-            variant="outline"
-            onClick={handleLogin}
-            disabled={isLoggingIn}
-            className="hidden sm:flex"
-          >
-            {isLoggingIn ? "Signing in..." : "Sign in with Google"}
+          <Button variant="outline" asChild>
+            <Link href="/signin">Sign In</Link>
           </Button>
-          <Button onClick={handleLogin} disabled={isLoggingIn}>
-            {isLoggingIn ? "Signing in..." : "Get Started"}
+          <Button asChild>
+            <Link href="/signup">Sign Up</Link>
           </Button>
         </div>
       </div>

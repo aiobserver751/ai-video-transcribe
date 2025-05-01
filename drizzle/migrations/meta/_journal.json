@@ -22,6 +22,34 @@
       "when": 1746037678684,
       "tag": "0002_foamy_virginia_dare",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1746103036318,
+      "tag": "0003_melodic_bucky",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1746110952016,
+      "tag": "0004_huge_madrox",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1746111542873,
+      "tag": "0005_icy_slayback",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1746122438248,
+      "tag": "0006_flimsy_secret_warriors",
+      "breakpoints": true
     }
   ]
 }
