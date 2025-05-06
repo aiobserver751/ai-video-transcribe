@@ -8,6 +8,6 @@ export interface TranscriptionJob {
   transcriptionText?: string | null;
   createdAt: Date;
   updatedAt: Date;
-  userId?: number | null;
+  userId?: string | null;
   transcriptionFileUrl?: string | null;
 } 

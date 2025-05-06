@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "subscription_cancelled_at_period_end" boolean DEFAULT false;

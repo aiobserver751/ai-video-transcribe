@@ -1,8 +1,15 @@
-import { getUserProfile } from "@/app/actions/userActions";
+'use client';
+
+import React from 'react';
+import { useUserProfile } from "@/context/UserProfileContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 // import { redirect } from 'next/navigation'; // Remove unused import
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { format } from 'date-fns';
+import { Loader2 } from 'lucide-react';
+import { getUserProfile } from "@/app/actions/userActions";
 
 // Helper function to capitalize first letter
 function capitalizeFirstLetter(string: string | null | undefined) {
@@ -10,32 +17,59 @@ function capitalizeFirstLetter(string: string | null | undefined) {
   return string.charAt(0).toUpperCase() + string.slice(1);
 }
 
-// Make the component async to fetch data
-export default async function AccountPage() {
-  const profile = await getUserProfile();
+// Convert to standard functional component, remove async
+export default function AccountPage() {
+  // Fetch profile using the hook
+  const { profile, isLoading, error } = useUserProfile();
 
-  // If no profile, redirect to login or show message
+  // Handle Loading State
+  if (isLoading) {
+    return <div className="p-6 flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /> Loading account...</div>;
+  }
+
+  // Handle Error State
+  if (error) {
+     return (
+        <div className="p-6">
+            <Alert variant="destructive">
+                <AlertTitle>Error Loading Profile</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+            </Alert>
+        </div>
+        );
+  }
+
+  // Handle No Profile State (User might not be logged in properly, context handles this)
   if (!profile) {
-    // Option 1: Redirect (make sure you have a sign-in page)
-    // redirect('/api/auth/signin'); 
-    
-    // Option 2: Show message
     return (
         <div className="p-6">
-          <h1 className="text-2xl font-semibold text-destructive">Access Denied</h1>
-          <p className="text-muted-foreground">You must be logged in to view account information.</p>
+          <Alert variant="default">
+              <AlertTitle>No Profile Found</AlertTitle>
+              <AlertDescription>Could not load user profile. Please try logging in again.</AlertDescription>
+          </Alert>
         </div>
       );
   }
 
   // Calculate initials for fallback
   const initials = profile.name
-    ? profile.name.split(' ').map((n) => n[0]).join('').toUpperCase()
+    ? profile.name.split(' ').map((n: string) => n[0]).join('').toUpperCase()
     : profile.email?.[0].toUpperCase() ?? 'U';
 
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold tracking-tight">Account Information</h1>
+
+      {/* Alert for pending cancellation */}            
+      {profile.subscriptionCancelledAtPeriodEnd && profile.stripeCurrentPeriodEnd && (
+          <Alert variant="destructive">
+              <AlertTitle>Subscription Cancellation Pending</AlertTitle>
+              <AlertDescription>
+                  Your <span className="font-semibold">{capitalizeFirstLetter(profile.subscriptionTier)}</span> plan is scheduled to cancel on <span className="font-semibold">{format(new Date(profile.stripeCurrentPeriodEnd), 'PPP')}</span>. 
+                  You will retain access until this date.
+              </AlertDescription>
+          </Alert>
+      )}
 
       <Card>
         <CardHeader>
@@ -60,6 +94,12 @@ export default async function AccountPage() {
 
                 <Label className="text-right font-semibold text-muted-foreground">Email</Label>
                 <span className="col-span-2 text-sm">{profile.email}</span>
+                
+                <Label className="text-right font-semibold text-muted-foreground">Subscription Plan</Label>
+                <span className="col-span-2 text-sm font-medium">{capitalizeFirstLetter(profile.subscriptionTier)}</span>
+
+                <Label className="text-right font-semibold text-muted-foreground">Credits Remaining</Label>
+                <span className="col-span-2 text-sm">{profile.credits ?? 0}</span>
                 
                 {/* Conditionally show password placeholder */} 
                 {profile.type === 'normal' && (

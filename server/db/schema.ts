@@ -10,8 +10,9 @@ export const qualityEnum = pgEnum('quality', ['standard', 'premium']);
 // Define an enum for job origin
 export const jobOriginEnum = pgEnum('job_origin', ['INTERNAL', 'EXTERNAL']); // Enum for job origin
 export const userTypeEnum = pgEnum('user_type', ['normal', 'google']); // <-- Add user type enum
+export const subscriptionTierEnum = pgEnum('subscription_tier', ['free', 'starter', 'pro']); // <-- Add subscription tier enum
 
-// --- Users Table (Updated for Auth.js) ---
+// --- Users Table (Updated for Auth.js & Subscriptions) ---
 export const users = pgTable('users', {
   // id: serial('id').primaryKey(), // Adapter expects text based on AdapterUser type
   id: text("id").primaryKey().notNull().$defaultFn(() => crypto.randomUUID()), // Use text UUID for compatibility
@@ -21,6 +22,17 @@ export const users = pgTable('users', {
   image: text("image"),
   type: userTypeEnum('type'), // <-- Add user type field (nullable for now)
   passwordHash: text("password_hash"), // <-- Corrected: text is nullable by default
+  
+  // Subscription Fields
+  subscriptionTier: subscriptionTierEnum('subscription_tier').default('free').notNull(), // Default to free
+  credits: integer('credits').default(0).notNull(), // Current credit balance, default 0
+
+  // Stripe Fields (nullable as not all users will have them initially)
+  stripeCustomerId: text('stripe_customer_id').unique(), 
+  stripeSubscriptionId: text('stripe_subscription_id').unique(), 
+  stripePriceId: text('stripe_price_id'), 
+  stripeCurrentPeriodEnd: timestamp('stripe_current_period_end', { mode: 'date', withTimezone: true }),
+  subscriptionCancelledAtPeriodEnd: boolean("subscription_cancelled_at_period_end").default(false),
   // description: text("description"), // Removed
   // location: text("location"),     // Removed
   // link: text("link"),           // Removed

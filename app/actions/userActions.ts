@@ -24,7 +24,7 @@ export async function getUserProfile(): Promise<SelectUser | null> {
     }
 
     try {
-        // Select ALL user fields to match SelectUser type
+        // Select ALL user fields, including new ones
         const profile = await db.select()
             .from(users)
             .where(eq(users.id, session.user.id))
@@ -103,6 +103,10 @@ export async function registerUser(
       email,
       passwordHash: hashedPassword,
       type: 'normal', // Use string literal
+      stripeSubscriptionId: users.stripeSubscriptionId,
+      stripePriceId: users.stripePriceId,
+      stripeCurrentPeriodEnd: users.stripeCurrentPeriodEnd,
+      subscriptionCancelledAtPeriodEnd: users.subscriptionCancelledAtPeriodEnd,
     });
 
     console.log(`New user registered: ${email}`);
