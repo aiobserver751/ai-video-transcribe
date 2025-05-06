@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, index, pgEnum, integer, boolean, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, index, pgEnum, integer, boolean, primaryKey } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import type { AdapterAccount } from "next-auth/adapters"; // Import AdapterAccount type
 
@@ -99,10 +99,10 @@ export const usersRelations = relations(users, ({ many }) => ({
 
 // --- ApiKeys Table ---
 export const apiKeys = pgTable('api_keys', {
-  id: serial('id').primaryKey(),
+  id: text('id').primaryKey().notNull().$defaultFn(() => crypto.randomUUID()), // Use text UUID for consistency
   key: text('key').unique().notNull(), // The API key string itself
   userId: text('user_id').references(() => users.id).notNull(), // Foreign key changed to text to match users.id
-  name: text('name'), // Optional name for user-generated keys
+  name: text('name').notNull(), // Optional name for user-generated keys -> NOW REQUIRED
   isActive: boolean('is_active').default(true).notNull(), // To enable/disable keys
   createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   lastUsedAt: timestamp('last_used_at', { mode: 'date', withTimezone: true }), // Optional: track usage
