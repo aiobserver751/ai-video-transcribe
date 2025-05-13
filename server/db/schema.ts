@@ -4,39 +4,57 @@ import type { AdapterAccount } from "next-auth/adapters"; // Import AdapterAccou
 
 // --- Enums ---
 // Define an enum for job status
-export const jobStatusEnum = pgEnum('job_status', ['pending', 'processing', 'completed', 'failed']);
-// Define an enum for quality level
-export const qualityEnum = pgEnum('quality', ['standard', 'premium']);
+export const jobStatusEnum = pgEnum('job_status', ['pending', 'processing', 'completed', 'failed', 'failed_insufficient_credits', 'pending_credit_deduction']);
+// Define an enum for quality level - UPDATED
+export const qualityEnum = pgEnum('quality', ['caption_first', 'standard', 'premium']);
 // Define an enum for job origin
 export const jobOriginEnum = pgEnum('job_origin', ['INTERNAL', 'EXTERNAL']); // Enum for job origin
-export const userTypeEnum = pgEnum('user_type', ['normal', 'google']); // <-- Add user type enum
-export const subscriptionTierEnum = pgEnum('subscription_tier', ['free', 'starter', 'pro']); // <-- Add subscription tier enum
+export const userTypeEnum = pgEnum('user_type', ['normal', 'google']);
+export const subscriptionTierEnum = pgEnum('subscription_tier', ['free', 'starter', 'pro']); // Current tiers
 
-// --- Users Table (Updated for Auth.js & Subscriptions) ---
+// NEW: Enum for credit transaction types
+export const creditTransactionTypeEnum = pgEnum('credit_transaction_type', [
+  // Credit Additions
+  'initial_allocation',
+  'free_tier_refresh',
+  'paid_tier_renewal',
+  'job_failure_refund',
+  'manual_adjustment_add',
+  // Credit Deductions (Spending)
+  'caption_download',
+  'standard_transcription',
+  'premium_transcription',
+  'basic_summary',       
+  'extended_summary',    
+  'manual_adjustment_deduct',
+  'paid_credits_expired_on_cancellation'
+]);
+
+// --- Users Table (Updated for Auth.js & Subscriptions & Credits) ---
 export const users = pgTable('users', {
-  // id: serial('id').primaryKey(), // Adapter expects text based on AdapterUser type
-  id: text("id").primaryKey().notNull().$defaultFn(() => crypto.randomUUID()), // Use text UUID for compatibility
+  id: text("id").primaryKey().notNull().$defaultFn(() => crypto.randomUUID()),
   name: text("name"),
   email: text("email").unique().notNull(),
   emailVerified: timestamp("emailVerified", { mode: "date", withTimezone: true }),
   image: text("image"),
-  type: userTypeEnum('type'), // <-- Add user type field (nullable for now)
-  passwordHash: text("password_hash"), // <-- Corrected: text is nullable by default
+  type: userTypeEnum('type'), 
+  passwordHash: text("password_hash"), 
   
   // Subscription Fields
-  subscriptionTier: subscriptionTierEnum('subscription_tier').default('free').notNull(), // Default to free
-  credits: integer('credits').default(0).notNull(), // Current credit balance, default 0
+  subscriptionTier: subscriptionTierEnum('subscription_tier').default('free').notNull(), 
+  // RENAMED from 'credits' and ADDED 'credits_refreshed_at'
+  credit_balance: integer('credit_balance').default(0).notNull(), 
+  credits_refreshed_at: timestamp('credits_refreshed_at', { mode: "date", withTimezone: true }), // For free tier refresh tracking
 
-  // Stripe Fields (nullable as not all users will have them initially)
+  // Stripe Fields
   stripeCustomerId: text('stripe_customer_id').unique(), 
   stripeSubscriptionId: text('stripe_subscription_id').unique(), 
   stripePriceId: text('stripe_price_id'), 
   stripeCurrentPeriodEnd: timestamp('stripe_current_period_end', { mode: 'date', withTimezone: true }),
-  subscriptionCancelledAtPeriodEnd: boolean("subscription_cancelled_at_period_end").default(false),
-  // description: text("description"), // Removed
-  // location: text("location"),     // Removed
-  // link: text("link"),           // Removed
-  // createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(), // Use existing or let adapter handle? Let's remove for now.
+  subscriptionCancelledAtPeriodEnd: boolean('subscription_cancelled_at_period_end').default(false).notNull(),
+
+  // Timestamps
+  createdAt: timestamp("createdAt", { mode: "date", withTimezone: true }).defaultNow().notNull(),
 });
 
 // --- Accounts Table (For Auth.js Providers) ---
@@ -59,7 +77,7 @@ export const accounts = pgTable(
   },
   (account) => ({
     compoundKey: primaryKey({ columns: [account.provider, account.providerAccountId] }),
-    userIdIdx: index('accounts_userId_idx').on(account.userId), // Index on userId
+    userIdIdx: index('accounts_userId_idx').on(account.userId),
   })
 );
 
@@ -72,7 +90,7 @@ export const sessions = pgTable("sessions", {
   expires: timestamp("expires", { mode: "date", withTimezone: true }).notNull(),
 },
 (session) => ({
-    userIdIdx: index('sessions_userId_idx').on(session.userId), // Index on userId
+    userIdIdx: index('sessions_userId_idx').on(session.userId),
 }));
 
 // --- Verification Tokens Table (For Auth.js Email Verification etc.) ---
@@ -88,54 +106,39 @@ export const verificationTokens = pgTable(
   })
 );
 
-
-// Define relations for Users (Updated for Auth.js)
-export const usersRelations = relations(users, ({ many }) => ({
-  accounts: many(accounts), // Relation to accounts table
-  sessions: many(sessions), // Relation to sessions table
-  jobs: many(transcriptionJobs),
-  apiKeys: many(apiKeys),
-}));
-
 // --- ApiKeys Table ---
 export const apiKeys = pgTable('api_keys', {
-  id: text('id').primaryKey().notNull().$defaultFn(() => crypto.randomUUID()), // Use text UUID for consistency
-  key: text('key').unique().notNull(), // The API key string itself
-  userId: text('user_id').references(() => users.id).notNull(), // Foreign key changed to text to match users.id
-  name: text('name').notNull(), // Optional name for user-generated keys -> NOW REQUIRED
-  isActive: boolean('is_active').default(true).notNull(), // To enable/disable keys
+  id: text('id').primaryKey().notNull().$defaultFn(() => crypto.randomUUID()),
+  key: text('key').unique().notNull(),
+  userId: text('user_id').references(() => users.id, { onDelete: "cascade" }).notNull(), // Added onDelete cascade
+  name: text('name').notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
   createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
-  lastUsedAt: timestamp('last_used_at', { mode: 'date', withTimezone: true }), // Optional: track usage
+  lastUsedAt: timestamp('last_used_at', { mode: 'date', withTimezone: true }),
 },
 (table) => {
-  // Add indexes
   return {
-    keyIdx: index('key_idx').on(table.key), // Index for fast key lookup
-    userIdx: index('api_key_user_id_idx').on(table.userId), // Index for listing user keys
+    keyIdx: index('key_idx').on(table.key),
+    userIdx: index('api_key_user_id_idx').on(table.userId),
   };
 });
 
-// Define relations for ApiKeys (one key belongs to one user)
-export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
-  user: one(users, {
-    fields: [apiKeys.userId],
-    references: [users.id],
-  }),
-}));
-
-// --- TranscriptionJobs Table ---
+// --- TranscriptionJobs Table (Updated for Credits) ---
 export const transcriptionJobs = pgTable('transcription_jobs', {
   id: text('id').primaryKey(),
-  userId: text('user_id').references(() => users.id), // Foreign key changed to text to match users.id
+  userId: text('user_id').references(() => users.id, { onDelete: "set null" }), // Set null if user is deleted
   videoUrl: text('video_url').notNull(),
-  quality: qualityEnum('quality').notNull(),
-  status: jobStatusEnum('status').default('pending').notNull(),
+  quality: qualityEnum('quality').notNull(), // Uses updated enum
+  status: jobStatusEnum('status').default('pending').notNull(), // Uses updated enum
   origin: jobOriginEnum('origin').notNull(),
   statusMessage: text('status_message'),
   transcriptionFileUrl: text('transcription_file_url'),
   transcriptionText: text('transcription_text'),
   createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  // NEW Fields for credit system
+  video_length_minutes_actual: integer('video_length_minutes_actual'),
+  credits_charged: integer('credits_charged'),
 },
 (table) => {
   return {
@@ -145,11 +148,63 @@ export const transcriptionJobs = pgTable('transcription_jobs', {
   };
 });
 
-// Define relations for TranscriptionJobs (one job belongs to one user)
-// Relation updated implicitly via usersRelations
-export const transcriptionJobsRelations = relations(transcriptionJobs, ({ one }) => ({
+// --- NEW: CreditTransactions Table ---
+export const creditTransactions = pgTable('credit_transactions', {
+  id: text('id').primaryKey().notNull().$defaultFn(() => crypto.randomUUID()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: "cascade" }), // Cascade delete if user is deleted
+  jobId: text('job_id').references(() => transcriptionJobs.id, { onDelete: "set null" }), // Set null if job is deleted
+  amount: integer('amount').notNull(), // Always positive
+  type: creditTransactionTypeEnum('type').notNull(),
+  description: text('description'),
+  video_length_minutes_charged: integer('video_length_minutes_charged'),
+  user_credits_before: integer('user_credits_before').notNull(),
+  user_credits_after: integer('user_credits_after').notNull(),
+  created_at: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+},
+(table) => {
+  return {
+    userIdx: index('credit_transactions_user_id_idx').on(table.userId),
+    jobIdx: index('credit_transactions_job_id_idx').on(table.jobId),
+    typeIdx: index('credit_transactions_type_idx').on(table.type),
+  };
+});
+
+// --- RELATIONS ---
+
+// Define relations for Users (Updated for Credits)
+export const usersRelations = relations(users, ({ many }) => ({
+  accounts: many(accounts),
+  sessions: many(sessions),
+  jobs: many(transcriptionJobs),
+  apiKeys: many(apiKeys),
+  creditTransactions: many(creditTransactions), // NEW relation
+}));
+
+// Define relations for ApiKeys
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  user: one(users, {
+    fields: [apiKeys.userId],
+    references: [users.id],
+  }),
+}));
+
+// Define relations for TranscriptionJobs
+export const transcriptionJobsRelations = relations(transcriptionJobs, ({ one, many }) => ({
     user: one(users, {
         fields: [transcriptionJobs.userId],
         references: [users.id],
     }),
+    creditTransactions: many(creditTransactions), // NEW relation: a job can have multiple credit transactions (e.g. charge + refund)
+})); 
+
+// NEW: Define relations for CreditTransactions
+export const creditTransactionsRelations = relations(creditTransactions, ({ one }) => ({
+  user: one(users, {
+    fields: [creditTransactions.userId],
+    references: [users.id],
+  }),
+  job: one(transcriptionJobs, {
+    fields: [creditTransactions.jobId],
+    references: [transcriptionJobs.id],
+  }),
 })); 

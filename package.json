@@ -8,11 +8,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "workers": "node --loader ts-node/esm scripts/init-workers.ts",
+    "workers": "tsx scripts/init-workers.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --loader ts-node/esm scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "refresh-free-credits": "node scripts/run-manual-refresh.js"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.9.0",
@@ -92,6 +93,8 @@
     "postcss": "^8",
     "tailwindcss": "^3.4.11",
     "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.19.4",
     "typescript": "^5.5.3"
   }
 }

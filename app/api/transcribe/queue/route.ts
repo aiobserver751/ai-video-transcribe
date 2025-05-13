@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { addTranscriptionJob, getJobStatus } from '@/lib/queue/transcription-queue';
 import { logger } from '@/lib/logger';
 import { db } from '@/server/db'; // Import db instance
-import { transcriptionJobs, apiKeys } from '@/server/db/schema'; // Import tables
+import { transcriptionJobs, apiKeys, qualityEnum, users } from '@/server/db/schema'; // Import tables, added users table
 import { eq, and } from 'drizzle-orm'; // Import Drizzle operators
 
 // Validate URL function
@@ -49,6 +49,38 @@ export async function POST(request: NextRequest) {
     const authenticatedUserId = validApiKey.userId; // Get the user ID associated with this key
     logger.info(`API Key validated for user ID: ${authenticatedUserId}`);
 
+    // === ADDED: Subscription Tier Check ===
+    const userResult = await db.select({ 
+        subscriptionTier: users.subscriptionTier 
+      })
+      .from(users)
+      .where(eq(users.id, authenticatedUserId))
+      .limit(1);
+
+    if (userResult.length === 0) {
+      // This case should be rare if an API key exists for a user, implies data inconsistency
+      logger.error(`[API JOB SUBMISSION] User ${authenticatedUserId} found via API key but not present in users table.`);
+      return NextResponse.json(
+        { error: 'User account associated with API key not found', status_code: 500, message: 'Internal Server Error' }, // Corrected: status_message to message
+        { status: 500 }
+      );
+    }
+
+    const currentUser = userResult[0];
+    if (currentUser.subscriptionTier === 'free') {
+      logger.warn(`[API JOB SUBMISSION] User ${authenticatedUserId} on 'free' tier attempted API job submission. Denied.`);
+      return NextResponse.json(
+        { 
+          error: 'API access is not available for users on the free tier. Please upgrade your plan to use API keys for job submission.',
+          status_code: 403, 
+          message: 'Forbidden' // Corrected: status_message to message
+        },
+        { status: 403 }
+      );
+    }
+    logger.info(`[API JOB SUBMISSION] User ${authenticatedUserId} on tier '${currentUser.subscriptionTier}' permitted for API job submission.`);
+    // === END: Subscription Tier Check ===
+
     // Asynchronously update lastUsedAt (fire and forget - doesn't block response)
     // Consider adding await if strict atomicity with job creation is needed,
     // but this might slightly delay the initial response.
@@ -72,7 +104,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Note: We don't need userId from the body anymore, we use the one from the API key
-    const { url, quality = 'standard', fallbackOnRateLimit = true, callback_url } = await request.json();
+    const { url, quality, fallbackOnRateLimit = true, callback_url } = await request.json();
 
     if (!url) {
       return NextResponse.json(
@@ -85,16 +117,48 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate YouTube URL
-    if (!url.includes('youtube.com') && !url.includes('youtu.be')) {
+    // Validate quality parameter against enum
+    if (!quality || !qualityEnum.enumValues.includes(quality)) {
       return NextResponse.json(
         {
-          error: 'Invalid YouTube URL',
+          error: `Invalid quality parameter. Must be one of: ${qualityEnum.enumValues.join(', ')}`,
           status_code: 400,
           status_message: 'Bad Request'
         },
         { status: 400 }
       );
+    }
+    const requestedQuality = quality as typeof qualityEnum.enumValues[number]; // Type assertion after validation
+
+    // Conditional YouTube URL validation for 'caption_first' quality
+    if (requestedQuality === 'caption_first') {
+      try {
+        const parsedUrl = new URL(url);
+        const hostname = parsedUrl.hostname.toLowerCase();
+        const isYouTube = (hostname === "youtube.com" || hostname === "www.youtube.com") && parsedUrl.searchParams.has("v");
+        const isYoutuBe = hostname === "youtu.be" && parsedUrl.pathname.length > 1;
+
+        if (!isYouTube && !isYoutuBe) {
+          return NextResponse.json(
+            {
+              error: "For 'caption_first' quality, a valid YouTube video URL is required (e.g., youtube.com?v=VIDEO_ID or youtu.be/VIDEO_ID). Other platforms are not supported for this quality setting.",
+              status_code: 400,
+              status_message: 'Bad Request'
+            },
+            { status: 400 }
+          );
+        }
+      } catch {
+        // URL parsing failed, means it's not a valid URL format for this check
+        return NextResponse.json(
+          {
+            error: "Invalid URL format provided for 'caption_first' quality check.",
+            status_code: 400,
+            status_message: 'Bad Request'
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Validate callback URL if provided
@@ -110,19 +174,25 @@ export async function POST(request: NextRequest) {
     }
 
     // === 3. Add Job to Queue ===
-    const requestedQuality = quality === 'premium' ? 'premium' : 'standard';
+    let jobPriority: 'standard' | 'premium';
+    if (requestedQuality === 'caption_first') {
+      jobPriority = 'standard'; // caption_first jobs get standard priority
+    } else {
+      jobPriority = requestedQuality; // 'standard' or 'premium' directly map
+    }
+
     const jobId = await addTranscriptionJob(
       {
         url,
         quality: requestedQuality,
         fallbackOnRateLimit,
-        userId: authenticatedUserId, // Use userId from the validated API key
-        apiKey: apiKey, // Pass the validated key for potential future use/logging in job data
+        userId: authenticatedUserId,
+        apiKey: apiKey, 
         callback_url
       },
-      requestedQuality
+      jobPriority // Use the determined jobPriority
     );
-    logger.info(`Added transcription job to queue: ${jobId} for user: ${authenticatedUserId}`);
+    logger.info(`Added transcription job to queue: ${jobId} for user: ${authenticatedUserId}, priority: ${jobPriority}`);
 
     // === 4. Insert Job Record in DB ===
     try {
@@ -132,7 +202,7 @@ export async function POST(request: NextRequest) {
         userId: authenticatedUserId, 
         videoUrl: url,
         quality: requestedQuality,
-        status: 'pending',
+        status: 'pending_credit_deduction',
         origin: 'EXTERNAL',
         // transcriptionFileUrl will be updated later
       });

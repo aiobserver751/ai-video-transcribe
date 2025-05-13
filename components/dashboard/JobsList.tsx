@@ -14,7 +14,7 @@ import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { type TranscriptionJob } from "@/lib/types";
 import { formatDistanceToNow } from "date-fns";
-import { FileText } from "lucide-react";
+import { FileText, PlusCircle } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { differenceInDays } from "date-fns";
 
@@ -44,21 +44,13 @@ const JobsList = ({ jobs, onViewDetails }: JobsListProps) => {
       case "completed":
         return "success";
       case "processing":
+      case "pending_credit_deduction": // Treat as processing for badge color
         return "default";
       case "failed":
+      case "failed_insufficient_credits": // Treat as failed for badge color
         return "destructive";
       default:
         return "secondary";
-    }
-  };
-
-  // Function to format YouTube URL for display
-  const formatYouTubeUrl = (url: string) => {
-    try {
-      const videoId = new URL(url).searchParams.get("v");
-      return videoId ? `YouTube ID: ${videoId}` : url;
-    } catch {
-      return url;
     }
   };
 
@@ -104,7 +96,9 @@ const JobsList = ({ jobs, onViewDetails }: JobsListProps) => {
   return (
     <div>
       {/* Filter Controls */}
-      <div className="flex space-x-4 p-4 bg-white dark:bg-muted/10 border-b">
+      <div className="flex justify-between items-center space-x-4 p-4 bg-white dark:bg-muted/10 border-b">
+        {/* Grouping filters */}
+        <div className="flex space-x-4 items-end">
         {/* Type Filter */}
         <div>
           <label htmlFor="type-filter" className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Type</label>
@@ -133,6 +127,13 @@ const JobsList = ({ jobs, onViewDetails }: JobsListProps) => {
             </SelectContent>
           </Select>
         </div>
+        </div>
+        
+        {/* New Transcription Button */}
+        <Button onClick={() => router.push('/transcribe')}>
+          <PlusCircle className="mr-2 h-4 w-4" />
+          New Transcription
+        </Button>
       </div>
 
       {/* Table Section */}
@@ -157,9 +158,20 @@ const JobsList = ({ jobs, onViewDetails }: JobsListProps) => {
                   <TableRow key={job.id}>
                     <TableCell className="font-mono text-xs">{job.id}</TableCell>
                     <TableCell className="max-w-[200px] truncate text-sm">
-                      {formatYouTubeUrl(job.videoUrl)}
+                      {/* Display full videoUrl as a link opening in a new tab */}
+                      <a
+                        href={job.videoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline"
+                        title={job.videoUrl} // Show full URL on hover
+                      >
+                        {job.videoUrl}
+                      </a>
                     </TableCell>
-                    <TableCell className="capitalize text-sm">{job.quality}</TableCell>
+                    <TableCell className="capitalize text-sm">
+                      {job.quality === 'caption_first' ? 'Caption First' : job.quality}
+                    </TableCell>
                     <TableCell className="text-sm">
                       {job.origin === 'INTERNAL' ? 'Normal' : job.origin === 'EXTERNAL' ? 'API' : job.origin}
                     </TableCell>
@@ -168,7 +180,12 @@ const JobsList = ({ jobs, onViewDetails }: JobsListProps) => {
                         variant={getStatusBadgeVariant(job.status)}
                         className="capitalize text-xs px-2 py-0.5"
                       >
-                        {job.status}
+                        {/* Modify displayed status text */}
+                        {job.status === "pending_credit_deduction"
+                          ? "Processing"
+                          : job.status === "failed_insufficient_credits"
+                          ? "Failed"
+                          : job.status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm">{formatDistanceToNow(job.createdAt, { addSuffix: true })}</TableCell>

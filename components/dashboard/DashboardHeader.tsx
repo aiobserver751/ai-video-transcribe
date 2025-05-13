@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 // import { useRouter } from "next/navigation"; // Remove unused import
-import { Bell, Search } from "lucide-react";
+import { Bell, Search, Coins } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { useUserProfile } from "@/context/UserProfileContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -43,6 +43,19 @@ const DashboardHeader = () => {
             <Bell className="h-5 w-5" />
             <span className="absolute top-0 right-0 h-2 w-2 rounded-full bg-red-500"></span>
           </button>
+
+          {/* Credit Balance Display */}
+          <div className="flex items-center gap-1 text-sm">
+            {isLoading ? (
+              <Skeleton className="h-5 w-16" />
+            ) : (
+              <>
+                <Coins className="h-4 w-4 text-yellow-500" />
+                <span>{profile?.credit_balance ?? 0}</span>
+                <span className="hidden sm:inline"> Credits</span>
+              </>
+            )}
+          </div>
           
           <div className="flex items-center gap-2">
             {isLoading ? (

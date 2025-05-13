@@ -18,11 +18,18 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import {
   generateApiKey,
   listApiKeys,
   revokeApiKey,
 } from '@/app/actions/apiKeyActions'; // Adjust path if needed
 import { format } from 'date-fns';
+import { useUserProfile } from '@/context/UserProfileContext';
+import Link from 'next/link';
 
 // Interface for the shape of API key metadata returned by listApiKeys
 interface ApiKeyMetadata {
@@ -36,6 +43,7 @@ interface ApiKeyMetadata {
 }
 
 export default function SettingsPage() {
+  const userProfileData = useUserProfile();
   const [apiKeysList, setApiKeysList] = useState<ApiKeyMetadata[]>([]);
   const [isLoadingKeys, setIsLoadingKeys] = useState(true);
   const [isLoadingGenerate, setIsLoadingGenerate] = useState(false);
@@ -180,115 +188,142 @@ export default function SettingsPage() {
         </Card>
       )}
 
-      {/* Section to Create New API Key */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Generate New API Key</CardTitle>
-          <CardDescription>
-            Give your key a descriptive name (optional) for easier identification.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Input
-            placeholder="Enter a name for your API key (e.g., My Integration)"
-            value={newKeyName}
-            onChange={(e) => setNewKeyName(e.target.value)}
-            disabled={isLoadingGenerate}
-          />
-          <Button onClick={handleGenerateKey} disabled={isLoadingGenerate || !newKeyName.trim()}>
-            {isLoadingGenerate && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Generate Key
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Section to List API Keys */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Your API Keys</CardTitle>
-          <CardDescription>
-            These are your existing API keys. Remember to treat them like passwords.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoadingKeys ? (
+      {/* Section to Create New API Key - Gated by subscription tier */}
+      {userProfileData.isLoading ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Generate New API Key</CardTitle>
+          </CardHeader>
+          <CardContent>
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-              <p className="ml-2">Loading your API keys...</p>
+              <p className="ml-2">Loading your subscription details...</p>
             </div>
-          ) : error && !apiKeysList.length ? (
-             <div className="text-destructive flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5" /> {error}
-             </div>
-          ) : apiKeysList.length === 0 ? (
-            <div className="text-center text-muted-foreground py-8">
-              <Info className="mx-auto h-10 w-10 mb-2" />
-              <p className="font-semibold">No API keys found.</p>
-              <p>Generate your first API key above to get started.</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {apiKeysList.map((key) => (
-                <div key={key.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 border rounded-lg">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate">
-                      {key.name}
-                    </p>
-                    <p className="text-xs text-muted-foreground font-mono">
-                      {`${key.keyPrefix}...${key.keySuffix}`}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Created: {format(new Date(key.createdAt), 'MMM d, yyyy, HH:mm')}
-                      {key.lastUsedAt && (
-                        <span className="ml-2">| Last used: {format(new Date(key.lastUsedAt), 'MMM d, yyyy, HH:mm')}</span>
-                      )}
-                    </p>
-                     <p className="text-xs text-muted-foreground">
-                        Status: {key.isActive ? <span className="text-green-600">Active</span> : <span className="text-red-600">Inactive</span>}
-                    </p>
-                  </div>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-destructive text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        disabled={isLoadingRevoke === key.id}
-                      >
-                        {isLoadingRevoke === key.id ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="mr-2 h-4 w-4" />
+          </CardContent>
+        </Card>
+      ) : userProfileData.profile?.subscriptionTier === 'free' ? (
+        <Alert variant="default" className="bg-blue-50 border-blue-200 dark:bg-blue-900/30 dark:border-blue-700">
+          <AlertTriangle className="h-5 w-5 text-blue-500" />
+          <AlertTitle className="text-blue-700 dark:text-blue-300">API Keys Not Available on Free Tier</AlertTitle>
+          <AlertDescription className="text-blue-600 dark:text-blue-400">
+            To generate and use API keys for programmatic access, please upgrade your plan.
+            <Button asChild variant="link" className="px-1 text-blue-700 dark:text-blue-300 hover:text-blue-800 dark:hover:text-blue-200">
+              <Link href="/billing">Upgrade to Starter or Pro</Link>
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Generate New API Key</CardTitle>
+            <CardDescription>
+              Give your key a descriptive name (optional) for easier identification.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Input
+              placeholder="Enter a name for your API key (e.g., My Integration)"
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              disabled={isLoadingGenerate}
+            />
+            <Button onClick={handleGenerateKey} disabled={isLoadingGenerate || !newKeyName.trim()}>
+              {isLoadingGenerate && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Generate Key
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Section to List API Keys - Conditionally render based on tier */}
+      {!userProfileData.isLoading && userProfileData.profile?.subscriptionTier !== 'free' && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Your API Keys</CardTitle>
+            <CardDescription>
+              These are your existing API keys. Remember to treat them like passwords.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isLoadingKeys ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                <p className="ml-2">Loading your API keys...</p>
+              </div>
+            ) : error && !apiKeysList.length ? (
+               <div className="text-destructive flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5" /> {error}
+               </div>
+            ) : apiKeysList.length === 0 ? (
+              <div className="text-center text-muted-foreground py-8">
+                <Info className="mx-auto h-10 w-10 mb-2" />
+                <p className="font-semibold">No API keys found.</p>
+                <p>Generate your first API key above to get started.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {apiKeysList.map((key) => (
+                  <div key={key.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 border rounded-lg">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate">
+                        {key.name}
+                      </p>
+                      <p className="text-xs text-muted-foreground font-mono">
+                        {`${key.keyPrefix}...${key.keySuffix}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Created: {format(new Date(key.createdAt), 'MMM d, yyyy, HH:mm')}
+                        {key.lastUsedAt && (
+                          <span className="ml-2">| Last used: {format(new Date(key.lastUsedAt), 'MMM d, yyyy, HH:mm')}</span>
                         )}
-                        Revoke
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          This action cannot be undone. Revoking this API key ({key.name} - {`${key.keyPrefix}...${key.keySuffix}`}) will immediately prevent it from being used for any requests.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel disabled={isLoadingRevoke === key.id}>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={() => handleRevokeKey(key.id)}
+                      </p>
+                       <p className="text-xs text-muted-foreground">
+                          Status: {key.isActive ? <span className="text-green-600">Active</span> : <span className="text-red-600">Inactive</span>}
+                      </p>
+                    </div>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-destructive text-destructive hover:bg-destructive/10 hover:text-destructive"
                           disabled={isLoadingRevoke === key.id}
-                          className="bg-destructive hover:bg-destructive/90"
                         >
-                          {isLoadingRevoke === key.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                          Yes, Revoke Key
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                          {isLoadingRevoke === key.id ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="mr-2 h-4 w-4" />
+                          )}
+                          Revoke
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This action cannot be undone. Revoking this API key ({key.name} - {`${key.keyPrefix}...${key.keySuffix}`}) will immediately prevent it from being used for any requests.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel disabled={isLoadingRevoke === key.id}>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => handleRevokeKey(key.id)}
+                            disabled={isLoadingRevoke === key.id}
+                            className="bg-destructive hover:bg-destructive/90"
+                          >
+                            {isLoadingRevoke === key.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Yes, Revoke Key
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 } 

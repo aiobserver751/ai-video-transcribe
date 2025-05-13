@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import LandingHero from "@/components/landing/LandingHero";
 import LandingFeatures from "@/components/landing/LandingFeatures";
+import LandingPricing from "@/components/landing/PricingSection";
 import LandingNavbar from "@/components/landing/LandingNavbar";
 import LandingFooter from "@/components/landing/LandingFooter";
 
@@ -45,6 +46,7 @@ export default function HomePage() {
         <main className="flex-1">
           <LandingHero onDemoLogin={handleDemoLogin} isLoading={isLoading} />
           <LandingFeatures />
+          <LandingPricing />
         </main>
         
         <LandingFooter />

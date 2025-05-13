@@ -2,7 +2,7 @@
 
 import { getServerSession } from "next-auth/next";
 import Stripe from "stripe";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route"; 
+import { authConfig } from "@/auth.config";
 import { db } from "@/server/db";
 import { users } from "@/server/db/schema";
 import { eq } from "drizzle-orm";
@@ -28,7 +28,7 @@ const appUrl = process.env.NEXT_PUBLIC_APP_URL;
  * @returns Object containing the session URL or an error message.
  */
 export async function createCheckoutSession(priceId: string): Promise<{ url: string | null; error: string | null }> {
-  const session = await getServerSession(authOptions);
+  const session = await getServerSession(authConfig);
   if (!session?.user?.id) {
     return { url: null, error: "User not authenticated." };
   }
@@ -94,24 +94,20 @@ export async function createCheckoutSession(priceId: string): Promise<{ url: str
              return { url: null, error: "Could not find item to update on existing subscription." };
         }
 
-        // Simplified approach for update: Pass only essential IDs and configurations
+        // Use the correct parameters for subscription updates
         checkoutSessionParams = {
              ...checkoutSessionParams,
-             // Provide the new price directly in line_items for the checkout UI
              line_items: [
                  {
                      price: priceId,
                      quantity: 1,
                  }
              ],
-             // Specify the existing subscription to modify
-             subscription: currentSubscriptionId, 
-             // subscription_data might be used for other update flags like proration, trial end, etc.
              subscription_data: {
-                 // id: currentSubscriptionId, // ID seems to go in top-level 'subscription' parameter
-                 proration_behavior: 'create_prorations', 
-                 // items: undefined, // Avoid defining items here if types conflict
-                 metadata: { /* Add metadata if needed */ },
+                 proration_behavior: 'create_prorations',
+                 metadata: {
+                     previous_subscription_id: currentSubscriptionId
+                 }
              }
         };
 
@@ -126,8 +122,11 @@ export async function createCheckoutSession(priceId: string): Promise<{ url: str
                    quantity: 1,
                  },
              ],
-             subscription_data: undefined,
-             subscription: undefined, // Explicitly ensure subscription is undefined for new subs
+             subscription_data: {
+                 metadata: {
+                     user_id: userId
+                 }
+             }
          };
     }
 
@@ -154,7 +153,7 @@ export async function createCheckoutSession(priceId: string): Promise<{ url: str
  * @returns Object containing the portal session URL or an error message.
  */
 export async function createBillingPortalSession(): Promise<{ url: string | null; error: string | null }> {
-  const session = await getServerSession(authOptions);
+  const session = await getServerSession(authConfig);
   if (!session?.user?.id) {
     return { url: null, error: "User not authenticated." };
   }

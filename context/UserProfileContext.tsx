@@ -4,6 +4,7 @@ import React, { createContext, useState, useEffect, useContext, ReactNode, useCa
 import { getUserProfile } from '@/app/actions/userActions';
 import { users } from '@/server/db/schema';
 import { InferSelectModel } from 'drizzle-orm';
+import { useSession } from 'next-auth/react';
 
 // Define the shape of the user profile data
 export type UserProfile = InferSelectModel<typeof users>;
@@ -26,6 +27,7 @@ interface UserProfileProviderProps {
 
 // Create the provider component
 export const UserProfileProvider: React.FC<UserProfileProviderProps> = ({ children }) => {
+    const { data: session, status } = useSession();
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
@@ -48,10 +50,17 @@ export const UserProfileProvider: React.FC<UserProfileProviderProps> = ({ childr
         setIsLoading(false);
     }, []);
 
-    // Fetch profile on initial mount
+    // Fetch profile when session is authenticated
     useEffect(() => {
-        fetchProfile();
-    }, [fetchProfile]); // Depend on the memoized fetchProfile function
+        if (status === 'authenticated' && session?.user?.id) {
+            console.log("Session authenticated, fetching profile");
+            fetchProfile();
+        } else if (status === 'unauthenticated') {
+            console.log("Session unauthenticated, clearing profile");
+            setProfile(null);
+            setIsLoading(false);
+        }
+    }, [status, session, fetchProfile]);
 
     // Value provided by the context
     const value = {

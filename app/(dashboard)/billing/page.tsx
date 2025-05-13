@@ -27,15 +27,15 @@ const plans = [
     },
     {
         name: "Starter Plan",
-        priceId: 'price_1RLQvnGfOoM93d2Zr7tHC6XT', // <-- REPLACE THIS
-        priceMonthly: 9.99, // Example price
+        priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_STARTER || null,
+        priceMonthly: 9.99,
         features: ["1000 Credits monthly", "Standard + Premium quality"],
         tier: 'starter',
     },
     {
         name: "Pro Plan",
-        priceId: 'price_1RLQwZGfOoM93d2ZfVCxr1ic', // <-- REPLACE THIS
-        priceMonthly: 19.99, // Example price
+        priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_PRO || null,
+        priceMonthly: 19.99,
         features: ["5000 Credits monthly", "Standard + Premium quality", "AI Summaries"],
         tier: 'pro',
     },
@@ -102,7 +102,7 @@ export default function BillingPage() {
                 </Alert>
             )}
 
-            <Card>
+            <Card className="mb-6">
                 <CardHeader>
                     <CardTitle>Current Plan</CardTitle>
                     <CardDescription>

@@ -7,10 +7,10 @@ export default function LandingFeatures() {
           <div className="space-y-2">
             <div className="inline-block rounded-lg bg-gray-100 px-3 py-1 text-sm">Features</div>
             <h2 className="text-3xl font-bold tracking-tighter sm:text-5xl">
-              Everything You Need for Video Transcription
+                Start Mining Content Insights Today
             </h2>
             <p className="max-w-[900px] text-gray-500 md:text-xl/relaxed lg:text-base/relaxed xl:text-xl/relaxed">
-              Our platform makes it easy to convert YouTube videos to text with just a few clicks.
+            Transcribe videos, extract captions, and get basic summaries—all. Discover how content analysis can transform your strategy.
             </p>
           </div>
         </div>

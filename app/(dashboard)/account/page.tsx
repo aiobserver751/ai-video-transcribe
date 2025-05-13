@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { format } from 'date-fns';
 import { Loader2 } from 'lucide-react';
-import { getUserProfile } from "@/app/actions/userActions";
+// import { getUserProfile } from "@/app/actions/userActions";
 
 // Helper function to capitalize first letter
 function capitalizeFirstLetter(string: string | null | undefined) {
@@ -99,7 +99,7 @@ export default function AccountPage() {
                 <span className="col-span-2 text-sm font-medium">{capitalizeFirstLetter(profile.subscriptionTier)}</span>
 
                 <Label className="text-right font-semibold text-muted-foreground">Credits Remaining</Label>
-                <span className="col-span-2 text-sm">{profile.credits ?? 0}</span>
+                <span className="col-span-2 text-sm">{profile.credit_balance ?? 0}</span>
                 
                 {/* Conditionally show password placeholder */} 
                 {profile.type === 'normal' && (

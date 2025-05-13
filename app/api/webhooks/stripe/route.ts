@@ -2,8 +2,9 @@ import { headers } from 'next/headers';
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { db } from '@/server/db';
-import { users } from '@/server/db/schema';
+import { users, creditTransactionTypeEnum } from '@/server/db/schema';
 import { eq, SQL } from 'drizzle-orm';
+import { performCreditTransaction, getCreditConfig } from '@/server/services/creditService';
 
 // Initialize Stripe SDK (ensure SECRET_KEY is set)
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -18,8 +19,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 // IMPORTANT: Replace these with your ACTUAL Price IDs from Stripe!
 // Use consistent, simple tier names matching the enum and allowance map
 const priceIdToTierMap: Record<string, 'starter' | 'pro'> = {
-    ['price_1RLQvnGfOoM93d2Zr7tHC6XT']: 'starter',
-    ['price_1RLQwZGfOoM93d2ZfVCxr1ic']: 'pro',
+    [process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_STARTER || 'price_starter_placeholder']: 'starter',
+    [process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_PRO || 'price_pro_placeholder']: 'pro',
     // Add other price IDs if necessary (e.g., annual plans)
 };
 
@@ -106,7 +107,6 @@ export async function POST(req: Request) {
       let stripePriceId: string | null = null;
       let currentPeriodEnd: Date | null = null;
       let newTier: 'starter' | 'pro' | null = null;
-      let initialCredits: number | null = null;
 
       try {
         // Attempt 1: Retrieve the Subscription object first
@@ -122,10 +122,6 @@ export async function POST(req: Request) {
         newTier = priceIdToTierMap[stripePriceId];
         if (!newTier) {
             throw new Error(`Unrecognized Price ID ${stripePriceId} found on subscription ${stripeSubscriptionId}`);
-        }
-        initialCredits = tierCreditAllowance[newTier];
-        if (typeof initialCredits !== 'number') {
-             throw new Error(`Invalid credit allowance configuration for tier ${newTier}`);
         }
 
         // --- Attempt to get Timestamp --- 
@@ -163,15 +159,35 @@ export async function POST(req: Request) {
         console.log(`Using current_period_end from ${source}: ${currentPeriodEnd}`);
 
         // --- Update DB ---
-        console.log(`Updating user ${userId} via subscription ${stripeSubscriptionId} to tier ${newTier} with ${initialCredits} credits.`);
+        console.log(`Updating user ${userId} via subscription ${stripeSubscriptionId} to tier ${newTier}.`);
+        const newTierCredits = tierCreditAllowance[newTier!];
+        if (typeof newTierCredits !== 'number') {
+             throw new Error(`Invalid credit allowance configuration for tier ${newTier}`);
+        }
+
+        const creditTxResult = await performCreditTransaction(
+            userId,
+            newTierCredits,
+            creditTransactionTypeEnum.enumValues[2], // 'paid_tier_renewal'
+            { customDescription: `Subscription to ${newTier} tier activated.` }
+        );
+
+        if (!creditTxResult.success) {
+            console.error(`Failed to apply credits for new subscription ${stripeSubscriptionId} for user ${userId}: ${creditTxResult.error}`);
+            // Decide if this should be a fatal error for the webhook
+            // For now, we'll log and continue updating other user fields, but this is a critical issue.
+            // Consider returning NextResponse with error if credit transaction failure should halt process.
+        } else {
+            console.log(`Credits successfully applied for new subscription ${stripeSubscriptionId} for user ${userId}. New balance: ${creditTxResult.newBalance}`);
+        }
+        
         await db.update(users)
           .set({
             subscriptionTier: newTier,
-            stripeSubscriptionId: stripeSubscriptionId, // Use ID from session/subscription
-            stripeCustomerId: stripeCustomerId, // Use ID from session
-            stripePriceId: stripePriceId, // Use ID from subscription item
-            stripeCurrentPeriodEnd: currentPeriodEnd, // Use timestamp obtained from sub or invoice
-            credits: initialCredits,
+            stripeSubscriptionId: stripeSubscriptionId,
+            stripeCustomerId: stripeCustomerId,
+            stripePriceId: stripePriceId,
+            stripeCurrentPeriodEnd: currentPeriodEnd,
           })
           .where(eq(users.id, userId));
 
@@ -181,7 +197,7 @@ export async function POST(req: Request) {
           const message = error instanceof Error ? error.message : "Unknown DB error";
           // Declare and assign currentPeriodEndTs for logging only if currentPeriodEnd exists
           const currentPeriodEndTs = currentPeriodEnd ? Math.floor(currentPeriodEnd.getTime() / 1000) : null;
-          console.error(`Error handling checkout.session.completed for user ${userId}:`, message, { userId, newTier, initialCredits, stripeSubscriptionId, stripeCustomerId, stripePriceId, currentPeriodEndTs, currentPeriodEnd, invoiceId });
+          console.error(`Error handling checkout.session.completed for user ${userId}:`, message, { userId, newTier, stripeSubscriptionId, stripeCustomerId, stripePriceId, currentPeriodEndTs, currentPeriodEnd, invoiceId });
           return new NextResponse(`Webhook DB Error: ${message}`, { status: 500 });
       }
       break;
@@ -253,21 +269,61 @@ export async function POST(req: Request) {
                 if (!newTier) {
                     throw new Error(`Unrecognized Price ID ${stripePriceId} during renewal for subscription ${userSubscriptionId}.`);
                 }
-                const refillCredits = tierCreditAllowance[newTier];
+                const refillCredits = tierCreditAllowance[newTier!];
                 if (typeof refillCredits !== 'number') {
                     throw new Error(`Invalid credit allowance configuration for tier ${newTier} during renewal.`);
                 }
 
-                console.log(`PRE-DB UPDATE (invoice.payment_succeeded): UserID=${userIdForUpdate ?? 'N/A'}, SubID=${userSubscriptionId}, Setting stripeCurrentPeriodEnd=${currentPeriodEnd?.toISOString()}, Setting credits=${refillCredits}`);
+                // MODIFIED: Fetch user data including pendingSubscriptionTier to determine final tier
+                let finalUserIdForUpdate: string | null = userIdForUpdate; // User ID found via customer ID fallback
+
+                // Determine the definitive User ID for the update and credit transaction
+                if (!finalUserIdForUpdate) {
+                    // If we used subscription ID directly, fetch the user ID
+                    const userResult = await db.select({ 
+                        id: users.id 
+                    }).from(users).where(eq(users.stripeSubscriptionId, userSubscriptionId)).limit(1);
+                    if (userResult.length > 0 && userResult[0].id) {
+                        finalUserIdForUpdate = userResult[0].id;
+                    } else {
+                        throw new Error(`Could not find user for subscription ${userSubscriptionId} during renewal.`);
+                    }
+                } 
+                if (!finalUserIdForUpdate) {
+                     throw new Error(`User ID could not be determined for subscription ${userSubscriptionId} during renewal.`);
+                }
+                
+                // SIMPLIFIED: Credit refill always uses the tier from the current invoice/subscription
+                const tierForCreditRefill = newTier; 
+                const finalRefillCredits = tierCreditAllowance[tierForCreditRefill!];
+                if (typeof finalRefillCredits !== 'number') {
+                    throw new Error(`Invalid credit allowance configuration for tier ${tierForCreditRefill} during renewal.`);
+                }
+
+                // Perform Credit Transaction using the tier from the invoice
+                const creditTxResult = await performCreditTransaction(
+                    finalUserIdForUpdate!,
+                    finalRefillCredits,
+                    creditTransactionTypeEnum.enumValues[2], // 'paid_tier_renewal'
+                    { customDescription: `Subscription renewal for ${tierForCreditRefill} tier.` }
+                );
+
+                if (!creditTxResult.success) {
+                    console.error(`Failed to apply credits for subscription renewal ${userSubscriptionId} for user ${finalUserIdForUpdate}: ${creditTxResult.error}`);
+                    // Log and potentially alert, but the subscription itself is renewed.
+                } else {
+                    console.log(`Credits successfully reset for subscription ${userSubscriptionId} for user ${finalUserIdForUpdate}. Tier: ${tierForCreditRefill}, New balance: ${creditTxResult.newBalance}`);
+                }
+
+                console.log(`PRE-DB UPDATE (invoice.payment_succeeded): UserID=${finalUserIdForUpdate}, SubID=${userSubscriptionId}, Setting stripeCurrentPeriodEnd=${currentPeriodEnd?.toISOString()}`);
                 await db.update(users)
                    .set({
                        stripeCurrentPeriodEnd: currentPeriodEnd,
-                       credits: refillCredits,
-                       subscriptionCancelledAtPeriodEnd: false,
+                       subscriptionCancelledAtPeriodEnd: false // Reset cancellation flag
                    })
                    .where(updateWhereClause);
 
-                console.log(`Subscription ${userSubscriptionId} renewed successfully. Credits refilled.`);
+                console.log(`Subscription ${userSubscriptionId} renewed successfully. Tier confirmed as ${tierForCreditRefill}. Credits reset.`);
 
             } catch (error: unknown) {
                 const message = error instanceof Error ? error.message : "Unknown DB error";
@@ -292,8 +348,10 @@ export async function POST(req: Request) {
           // Fetch the user associated with this subscription ID
           const userResult = await db.select({
               id: users.id,
-              stripePriceId: users.stripePriceId, // Get current price ID from DB
-              // Add other fields if needed for logging or checks
+              stripePriceId: users.stripePriceId,
+              credit_balance: users.credit_balance,
+              subscriptionTier: users.subscriptionTier,
+              subscriptionCancelledAtPeriodEnd: users.subscriptionCancelledAtPeriodEnd
           }).from(users)
             .where(eq(users.stripeSubscriptionId, subscriptionId))
             .limit(1);
@@ -309,6 +367,9 @@ export async function POST(req: Request) {
           const userId = user.id;
           const currentDbPriceId = user.stripePriceId;
           const eventPriceId = subscription.items?.data[0]?.price?.id ?? null;
+          const currentDbTier = user.subscriptionTier;
+          const currentDbCreditBalance = user.credit_balance;
+          const currentDbSubscriptionCancelledAtPeriodEnd = user.subscriptionCancelledAtPeriodEnd;
 
           // Attempt to get period end from the FIRST item in the event data (Primary location)
           const eventItemPeriodEndTs = subscription.items?.data[0]?.current_period_end;
@@ -321,56 +382,138 @@ export async function POST(req: Request) {
           // Scenario 1: Definitive End (Cancellation / Deletion)
           if (isEndedStatus) {
               console.log(`Subscription ${subscriptionId} ended (Status: ${subscription.status}, Event: ${event.type}). Downgrading user ${userId}.`);
+              
+              // MODIFIED: Credit handling for subscription end
+              // 1. Clear any remaining paid credits
+              if (currentDbTier !== 'free' && currentDbCreditBalance > 0) {
+                  // UPDATED: Use the correct enum value now that it's in the schema
+                  const clearPaidCreditsResult = await performCreditTransaction(
+                      userId,
+                      currentDbCreditBalance,
+                      creditTransactionTypeEnum.enumValues[11], // 'paid_credits_expired_on_cancellation' (index 11)
+                      { customDescription: "Paid credits expired due to subscription termination." }
+                  );
+                  if (!clearPaidCreditsResult.success) {
+                      console.error(`Failed to clear paid credits for user ${userId} on subscription end: ${clearPaidCreditsResult.error}`);
+                  } else {
+                      console.log(`Cleared ${currentDbCreditBalance} paid credits for user ${userId}.`);
+                  }
+              }
+
+              // 2. Grant free tier initial credits (if applicable)
+              const creditSystemConfig = getCreditConfig(); // Ensure getCreditConfig is available
+              const freeInitialCredits = creditSystemConfig.FREE_TIER_INITIAL_CREDITS;
+              
+              if (freeInitialCredits > 0) {
+                  const grantFreeCreditsResult = await performCreditTransaction(
+                      userId,
+                      freeInitialCredits,
+                      creditTransactionTypeEnum.enumValues[0], // 'initial_allocation'
+                      { customDescription: "Initial free credits granted after paid subscription ended." }
+                  );
+                  if (!grantFreeCreditsResult.success) {
+                      console.error(`Failed to grant initial free credits to user ${userId} on subscription end: ${grantFreeCreditsResult.error}`);
+                  } else {
+                      console.log(`Granted ${freeInitialCredits} initial free credits to user ${userId}.`);
+                  }
+              } else {
+                  // If FREE_TIER_INITIAL_CREDITS is 0, ensure balance is 0 if not already by clearPaidCreditsResult
+                  // performCreditTransaction for 'paid_credits_expired_on_cancellation' should have set it to 0.
+                  console.log(`No initial free credits to grant for user ${userId} (FREE_TIER_INITIAL_CREDITS is 0 or less).`);
+              }
+
               await db.update(users)
                   .set({
                       subscriptionTier: 'free',
                       stripeSubscriptionId: null,
                       stripePriceId: null,
                       stripeCurrentPeriodEnd: null,
-                      credits: tierCreditAllowance.free,
-                      subscriptionCancelledAtPeriodEnd: false, // Reset this flag on downgrade
+                      subscriptionCancelledAtPeriodEnd: false
                   })
                   .where(eq(users.id, userId)); // Use user ID for update
-              console.log(`User ${userId} downgraded successfully for ended subscription ${subscriptionId}.`);
+              console.log(`User ${userId} downgraded successfully to free tier for ended subscription ${subscriptionId}.`);
           
-          // Scenario 2: Plan Change (via Portal/API) - Price ID differs, still active
-          } else if (isActiveStatus && eventPriceId && eventPriceId !== currentDbPriceId) {
-              const newTier = priceIdToTierMap[eventPriceId];
-              if (!newTier) {
-                  throw new Error(`Unrecognized Price ID ${eventPriceId} during subscription update for user ${userId}.`);
-              }
-              const newCredits = tierCreditAllowance[newTier];
-              if (typeof newCredits !== 'number') {
-                   throw new Error(`Invalid credit allowance for new tier ${newTier} during update.`);
-              }
-
-              // If period end is missing in event item, refetch the subscription
-              if (!eventPeriodEnd) {
-                  console.warn(`Subscription item ${subscriptionId} event data missing current_period_end. Refetching...`);
-                  const freshSubscription = await stripe.subscriptions.retrieve(subscriptionId);
-                  console.log("Refetched Subscription Object:", JSON.stringify(freshSubscription, null, 2)); 
-                   // Attempt to get period end from the FIRST item in the refetched data
-                   const freshItemPeriodEndTs = freshSubscription.items?.data[0]?.current_period_end;
-                   eventPeriodEnd = typeof freshItemPeriodEndTs === 'number' ? new Date(freshItemPeriodEndTs * 1000) : null;
-              }
-
-              // If still missing after refetch, throw error
-              if (!eventPeriodEnd) {
-                  throw new Error(`Missing current_period_end timestamp during subscription update (even after refetch) for user ${userId}.`);
-              }
+          // Scenario 2: Plan Change (via Portal/API) - Price ID differs, still active, not marked for cancellation
+          } else if (eventPriceId && currentDbPriceId !== eventPriceId && isActiveStatus && !isCancelledAtPeriodEnd) {
+              console.log(`Subscription ${subscriptionId} plan change detected for user ${userId}. DB Price: ${currentDbPriceId}, Event Price: ${eventPriceId}`);
               
-              console.log(`PRE-DB UPDATE (customer.subscription.updated - Plan Change): UserID=${userId}, SubID=${subscriptionId}, Setting stripeCurrentPeriodEnd=${eventPeriodEnd?.toISOString()}, Setting credits=${newCredits}`);
-              await db.update(users)
-                  .set({
-                      subscriptionTier: newTier,
-                      stripePriceId: eventPriceId,
-                      credits: newCredits,
-                      stripeCurrentPeriodEnd: eventPeriodEnd,
-                      subscriptionCancelledAtPeriodEnd: false,
-                  })
-                  .where(eq(users.id, userId));
-              console.log(`User ${userId} plan updated successfully for subscription ${subscriptionId}.`);
+              const newTier = priceIdToTierMap[eventPriceId] ?? null;
+              if (!newTier) {
+                  // If new Price ID is not in our map, it might be an unknown plan or error.
+                  // Log an error but don't necessarily throw, to avoid webhook retries for unmanageable states.
+                  // The subscription might still be valid on Stripe's side.
+                  console.error(`Unrecognized Price ID ${eventPriceId} during subscription update for user ${userId}. Cannot map to internal tier.`);
+                  // Potentially, update Stripe fields but leave tier and credits as is, or handle as per business logic.
+                  // For now, we'll skip credit/tier changes if price ID is unknown.
+                  await db.update(users)
+                    .set({ 
+                        stripePriceId: eventPriceId, // Update to the new Stripe Price ID from the event
+                        stripeCurrentPeriodEnd: eventPeriodEnd, // Update to the new period end from the event
+                        subscriptionCancelledAtPeriodEnd: false // Ensure this is false for an active plan change
+                    })
+                    .where(eq(users.id, userId));
+                  console.warn(`User ${userId} subscription ${subscriptionId} updated with unrecognized price ID ${eventPriceId}. Stripe fields updated, tier/credits unchanged.`);
 
+              } else {
+                  const newTierCredits = tierCreditAllowance[newTier];
+                  if (typeof newTierCredits !== 'number') {
+                       throw new Error(`Invalid credit allowance for new tier ${newTier} during update.`);
+                  }
+
+                  // Determine if it's an upgrade or downgrade based on existing tiers (pro > starter > free)
+                  // This logic assumes 'pro' and 'starter' are the only paid tiers.
+                  const isUpgrade = (currentDbTier === 'free' && (newTier === 'starter' || newTier === 'pro')) ||
+                                    (currentDbTier === 'starter' && newTier === 'pro');
+                  const isDowngrade = (currentDbTier === 'pro' && newTier === 'starter'); // Only Pro -> Starter is paid downgrade now
+
+                  const userUpdates: Partial<typeof users.$inferInsert> = {
+                       stripePriceId: eventPriceId, // Always update price ID
+                       subscriptionCancelledAtPeriodEnd: false // Ensure this is false
+                  };
+
+                  // Combine Upgrade and Downgrade logic - both are immediate now
+                  if (isUpgrade || isDowngrade) {
+                      const changeType = isUpgrade ? 'upgraded' : 'downgraded';
+                      console.log(`User ${userId} ${changeType} to ${newTier}. Setting tier and credits immediately.`);
+                      userUpdates.subscriptionTier = newTier; // Update tier immediately
+                      
+                      // Reset credits to the new tier's allowance
+                      const creditTxResult = await performCreditTransaction(
+                          userId,
+                          newTierCredits,
+                          creditTransactionTypeEnum.enumValues[2], // 'paid_tier_renewal' (using this type resets balance)
+                          { customDescription: `Subscription ${changeType} to ${newTier} tier.` }
+                      );
+                      
+                      if (!creditTxResult.success) {
+                          console.error(`Failed to apply credits for ${changeType} to ${newTier} for user ${userId}: ${creditTxResult.error}`);
+                      } else {
+                          console.log(`Credits successfully reset for ${changeType} to ${newTier} for user ${userId}. New balance: ${creditTxResult.newBalance}`);
+                      }
+
+                  } else if (newTier === currentDbTier) {
+                      // Price ID changed but mapped to the same tier (e.g., monthly vs annual)
+                      console.log(`User ${userId} subscription ${subscriptionId} price ID changed but remains on ${newTier} tier. Stripe fields updated.`);
+                      userUpdates.subscriptionTier = newTier; // Ensure tier is set correctly
+                  }
+
+                  // If period end is missing in event item, refetch the subscription
+                  if (!eventPeriodEnd) {
+                      console.warn(`Subscription item ${subscriptionId} event data missing current_period_end. Refetching...`);
+                      const freshSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+                      console.log("Refetched Subscription Object:", JSON.stringify(freshSubscription, null, 2)); 
+                       const freshItemPeriodEndTs = freshSubscription.items?.data[0]?.current_period_end;
+                       eventPeriodEnd = typeof freshItemPeriodEndTs === 'number' ? new Date(freshItemPeriodEndTs * 1000) : null;
+                  }
+                  if (!eventPeriodEnd) {
+                      throw new Error(`Missing current_period_end timestamp during subscription update (even after refetch) for user ${userId}.`);
+                  }
+                  userUpdates.stripeCurrentPeriodEnd = eventPeriodEnd; // Update period end
+                  
+                  console.log(`PRE-DB UPDATE (customer.subscription.updated - Plan Change): UserID=${userId}, SubID=${subscriptionId}, Updates: ${JSON.stringify(userUpdates)}`);
+                  await db.update(users).set(userUpdates).where(eq(users.id, userId));
+                  console.log(`User ${userId} plan update processed for subscription ${subscriptionId}. New Tier: ${userUpdates.subscriptionTier ?? currentDbTier}`);
+              }
           // Scenario 3: Marked for Cancellation (but still active)
           } else if (isActiveStatus && isCancelledAtPeriodEnd) {
                // Get period end for logging/display - Try event item first, then refetch if needed
@@ -387,23 +530,21 @@ export async function POST(req: Request) {
                }
                console.log(`Subscription ${subscriptionId} for user ${userId} updated. Marked to cancel at period end: ${periodEndForLog}`);
                await db.update(users)
-                   .set({ subscriptionCancelledAtPeriodEnd: true })
+                   .set({
+                       subscriptionCancelledAtPeriodEnd: true
+                    })
                    .where(eq(users.id, userId));
                console.log(`User ${userId} marked for cancellation at period end.`);
           
           // Scenario 4: Reactivated (cancel_at_period_end removed)
-          } else if (isActiveStatus && !isCancelledAtPeriodEnd) {
-              console.log(`Subscription ${subscriptionId} for user ${userId} updated. Reactivated or no cancellation pending.`);
-              // Ensure the flag is false if the subscription is active and not marked for cancellation
+          } else if (isActiveStatus && !isCancelledAtPeriodEnd && currentDbSubscriptionCancelledAtPeriodEnd) {
+              console.log(`Subscription ${subscriptionId} for user ${userId} updated. Reactivated.`);
               await db.update(users)
-                  .set({ subscriptionCancelledAtPeriodEnd: false })
-                  .where(eq(users.id, userId));
+                  .set({
+                      subscriptionCancelledAtPeriodEnd: false
+                    })
+                   .where(eq(users.id, userId));
               console.log(`User ${userId} cancellation flag reset.`);
-          }
-
-          // Add more specific logging for unhandled active updates if needed
-          else if (isActiveStatus) {
-               console.log(`Subscription ${subscriptionId} updated for user ${userId}. Status: ${subscription.status}. No relevant change detected (Price ID same, not marked for cancellation).`);
           }
           // Log other statuses if necessary
           else {

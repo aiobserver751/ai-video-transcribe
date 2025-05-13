@@ -4,14 +4,17 @@ import { db } from '@/server/db';
 import { transcriptionJobs } from '@/server/db/schema'; // Assuming this is your table
 import { eq } from 'drizzle-orm';
 import type { TranscriptionJob } from '@/lib/types';
+import { unstable_noStore as noStore } from 'next/cache'; // Import unstable_noStore
 
 export async function getJobDetails(jobId: string): Promise<TranscriptionJob | null> {
+  noStore(); // Opt out of caching for this action
+
   if (!jobId) {
     return null;
   }
 
   try {
-    const job = await db
+    const jobResult = await db
       .select({
         id: transcriptionJobs.id,
         videoUrl: transcriptionJobs.videoUrl,
@@ -24,33 +27,38 @@ export async function getJobDetails(jobId: string): Promise<TranscriptionJob | n
         updatedAt: transcriptionJobs.updatedAt,
         userId: transcriptionJobs.userId,
         transcriptionFileUrl: transcriptionJobs.transcriptionFileUrl,
+        video_length_minutes_actual: transcriptionJobs.video_length_minutes_actual,
+        credits_charged: transcriptionJobs.credits_charged
       })
       .from(transcriptionJobs)
       .where(eq(transcriptionJobs.id, jobId))
       .limit(1);
 
-    if (job.length === 0) {
+    if (jobResult.length === 0) {
       return null;
     }
 
-    // Drizzle returns dates as strings if not configured otherwise at driver/db level,
-    // or if they are actual date objects, they are fine.
-    // The TranscriptionJob type expects Date objects.
-    // We need to ensure they are Date objects before returning.
-    const result = job[0];
+    const job = jobResult[0];
+
+    // Ensure all fields match the TranscriptionJob type, especially enums
     return {
-      ...result,
-      createdAt: new Date(result.createdAt),
-      updatedAt: new Date(result.updatedAt),
-      // Ensure quality and status match the literal types if necessary, though select should handle it.
-      quality: result.quality as 'standard' | 'premium',
-      status: result.status as 'pending' | 'processing' | 'completed' | 'failed',
-      origin: result.origin as 'INTERNAL' | 'EXTERNAL', // Assuming origin is also an enum in schema
-    };
+      ...job,
+      createdAt: new Date(job.createdAt),
+      updatedAt: new Date(job.updatedAt),
+      quality: job.quality, // Should align with qualityEnum from schema
+      status: job.status,   // Should align with jobStatusEnum from schema
+      origin: job.origin,   // Should align with jobOriginEnum from schema
+      video_length_minutes_actual: job.video_length_minutes_actual ?? null,
+      credits_charged: job.credits_charged ?? null,
+      // Ensure other optional fields are handled (e.g., ?? null)
+      statusMessage: job.statusMessage ?? null,
+      transcriptionText: job.transcriptionText ?? null,
+      userId: job.userId ?? null,
+      transcriptionFileUrl: job.transcriptionFileUrl ?? null,
+    } as TranscriptionJob; // Cast is okay if you are sure of the shape
 
   } catch (error) {
     console.error(`Failed to fetch job details for job ${jobId}:`, error);
-    // Depending on error handling strategy, you might throw the error or return null
     return null; 
   }
 } 

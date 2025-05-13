@@ -2,31 +2,41 @@
 
 import { z } from "zod";
 import { db } from "@/server/db"; // Adjust path if necessary
-import { transcriptionJobs } from "@/server/db/schema";
+import { transcriptionJobs, qualityEnum } from "@/server/db/schema"; // Import qualityEnum
 import { revalidatePath } from "next/cache"; // To trigger re-fetching on the dashboard
 import { getAuthSession } from "@/lib/auth"; // Import the session utility
 import { addTranscriptionJob } from "@/lib/queue/transcription-queue";
 
 // Input schema validation using Zod
 const SubmitJobSchema = z.object({
-  videoUrl: z.string().url({ message: "Please enter a valid URL." }).refine(
-    (url) => {
-        try {
-            const parsedUrl = new URL(url);
-            const hostname = parsedUrl.hostname;
-            if (hostname === "youtube.com" || hostname === "www.youtube.com") {
-                return parsedUrl.searchParams.has("v");
-            }
-            if (hostname === "youtu.be") {
-                return parsedUrl.pathname.length > 1;
-            }
-            return false;
-        } catch {
-            return false;
-        }
-    }, { message: "Please enter a valid YouTube video URL."}
-  ),
-  quality: z.enum(["standard", "premium"]),
+  videoUrl: z.string().url({ message: "Please enter a valid URL." }),
+  quality: z.enum(qualityEnum.enumValues),
+}).superRefine((data, ctx) => {
+  if (data.quality === 'caption_first') {
+    try {
+      const parsedUrl = new URL(data.videoUrl);
+      const hostname = parsedUrl.hostname.toLowerCase(); // Normalize hostname
+      const isYouTube = (hostname === "youtube.com" || hostname === "www.youtube.com") && parsedUrl.searchParams.has("v");
+      const isYoutuBe = hostname === "youtu.be" && parsedUrl.pathname.length > 1;
+
+      if (!isYouTube && !isYoutuBe) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "For 'Caption First' quality, a valid YouTube video URL is required (e.g., youtube.com?v=VIDEO_ID or youtu.be/VIDEO_ID). Other platforms are not supported for this quality setting.",
+          path: ["videoUrl"],
+        });
+      }
+    } catch {
+      // This might happen if the URL is malformed, though z.string().url() should catch it first.
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid URL format. Please enter a valid video URL.",
+        path: ["videoUrl"],
+      });
+    }
+  }
+  // No specific cross-field validation needed if quality is not 'caption_first',
+  // as any valid URL is accepted then.
 });
 
 export async function submitJobAction(formData: FormData) {
@@ -71,7 +81,7 @@ export async function submitJobAction(formData: FormData) {
 
   try {
     // --- 3. Add to Queue (Gets jobId) ---
-    console.log(`Adding job for URL ${videoUrl} to queue...`);
+    console.log(`Adding job for URL ${videoUrl} with quality ${quality} to queue...`);
     // Pass data matching Omit<TranscriptionJobData, 'jobId'>
     // Assuming apiKey is not needed for internal jobs & fallback is true
     // Pass userId as optional field
@@ -84,29 +94,34 @@ export async function submitJobAction(formData: FormData) {
             apiKey: "", // No API key for internal job
             // callback_url: undefined // No callback for internal jobs
         }, 
-        quality // Pass quality also as priority hint
+        // Adjust priority: 'caption_first' jobs get 'standard' priority
+        quality === 'caption_first' ? 'standard' : quality 
     ); 
     console.log(`Job added to queue with ID: ${jobId}`);
 
     // --- 4. Database Interaction (Uses jobId from queue) ---
-    console.log(`Creating job ${jobId} in DB...`);
+    console.log(`Creating preliminary job ${jobId} in DB...`);
     await db.insert(transcriptionJobs).values({
       id: jobId, // Use jobId from queue function
       userId: userId, // <<< Changed: Link to authenticated user using the string ID
       videoUrl: videoUrl,
       quality: quality,
-      status: "pending", // Initial status
+      status: "pending_credit_deduction",
       origin: "INTERNAL", // Mark as internal origin
       createdAt: new Date(), 
-      updatedAt: new Date(), 
+      updatedAt: new Date(),
     });
-    console.log(`Job ${jobId} created successfully in DB.`);
+    console.log(`Preliminary job ${jobId} created successfully in DB with status 'pending_credit_deduction'.`);
 
     // --- 5. Trigger Revalidation (Optional but recommended) ---
     // Tells Next.js to refetch data for the dashboard path
     revalidatePath("/dashboard");
 
-    return { success: true, jobId: jobId };
+    return {
+      success: true,
+      jobId: jobId,
+      message: "Job submitted successfully. Credits will be deducted after video analysis."
+    };
 
   } catch (error) {
     // Improved error logging

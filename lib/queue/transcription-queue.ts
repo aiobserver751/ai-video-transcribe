@@ -12,28 +12,48 @@ import { promisify } from 'util';
 import axios from 'axios';
 // --- DB Imports ---
 import { db } from '../../server/db/index.ts';
-import { transcriptionJobs } from '../../server/db/schema.ts';
+import { transcriptionJobs, creditTransactionTypeEnum } from '../../server/db/schema.ts';
 import { eq } from 'drizzle-orm';
+// --- Credit Service Imports ---
+import {
+  calculateCreditCost,
+  performCreditTransaction,
+  getCreditConfig,
+} from '../../server/services/creditService.ts';
 
 const execAsync = promisify(exec);
+
+// Helper to check for YouTube URL
+function isYouTubeUrl(url: string): boolean {
+  try {
+    const parsedUrl = new URL(url);
+    const hostname = parsedUrl.hostname.toLowerCase();
+    return (
+      (hostname === "youtube.com" || hostname === "www.youtube.com") &&
+      parsedUrl.searchParams.has("v")
+    ) || (hostname === "youtu.be" && parsedUrl.pathname.length > 1);
+  } catch {
+    return false;
+  }
+}
 
 // Job data type for transcription job
 interface TranscriptionJobData {
   url: string;
-  quality: 'standard' | 'premium';
+  quality: 'caption_first' | 'standard' | 'premium';
   fallbackOnRateLimit: boolean;
   jobId: string;
-  userId?: string;
+  userId?: string; // Should always be present for jobs from submitJobAction
   apiKey: string;
   callback_url?: string; // Optional callback URL
 }
 
 // Result type for transcription job
 interface TranscriptionResult {
-  transcription: string;
-  quality: string;
+  transcription: string; // Holds transcript or caption content
+  quality: string; // The actual quality used (could be different due to fallback)
   jobId: string;
-  filePath?: string;
+  filePath?: string; // URL to the final file
   error?: string;
   callback_success?: boolean;
   callback_error?: string;
@@ -139,274 +159,552 @@ async function sendCallback(callbackUrl: string, data: CallbackData): Promise<bo
   }
 }
 
+async function fetchAndProcessSubtitlesForWorker(
+  jobId: string,
+  url: string,
+  baseOutputName: string // Used as the base for the output file, e.g., /tmp/jobid_videoID
+): Promise<{ fileContent: string | null; filePath: string | null; error?: string; formatUsed?: 'srt' | 'vtt' }> {
+  
+  // Attempt 1: User-Uploaded English SRT
+  const srtOutputName = `${baseOutputName}.en.srt`;
+  const userSrtCmd = `yt-dlp --no-warnings --write-subs --sub-lang en --sub-format srt --skip-download -o "${baseOutputName}.%(ext)s" "${url}"`;
+  logger.info(`[${jobId}:user-srt] Executing: ${userSrtCmd}`);
+  try {
+    if (fs.existsSync(srtOutputName)) { try { await fs.promises.unlink(srtOutputName); } catch (e) {logger.warn(`Error unlinking existing ${srtOutputName}`, e)} }
+    await execAsync(userSrtCmd);
+    if (fs.existsSync(srtOutputName)) {
+      const srtContent = await fs.promises.readFile(srtOutputName, "utf-8");
+      if (srtContent && srtContent.trim().length > 0) {
+        logger.info(`[${jobId}:user-srt] User SRT successfully downloaded. Length: ${srtContent.length}`);
+        return { fileContent: srtContent, filePath: srtOutputName, formatUsed: 'srt' };
+      }
+      logger.warn(`[${jobId}:user-srt] User SRT file downloaded but was empty. Cleaning up: ${srtOutputName}`);
+      try { await fs.promises.unlink(srtOutputName); } catch (e) {logger.warn(`Error unlinking empty ${srtOutputName}`, e)}
+    } else {
+      logger.info(`[${jobId}:user-srt] No user SRT file found.`);
+    }
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.warn(`[${jobId}:user-srt] Error during user SRT attempt: ${errorMessage}.`);
+    if (fs.existsSync(srtOutputName)) { try { await fs.promises.unlink(srtOutputName); } catch (e) {logger.warn(`Error unlinking ${srtOutputName} after error`,e)} }
+  }
+
+  // Attempt 2: User-Uploaded English VTT
+  const vttUserOutputName = `${baseOutputName}.en.vtt`; // Potentially same as auto-vtt, ensure cleanup
+  const userVttCmd = `yt-dlp --no-warnings --write-subs --sub-lang en --sub-format vtt --skip-download -o "${baseOutputName}.%(ext)s" "${url}"`;
+  logger.info(`[${jobId}:user-vtt] Executing: ${userVttCmd}`);
+  try {
+    if (fs.existsSync(vttUserOutputName)) { try { await fs.promises.unlink(vttUserOutputName); } catch (e) {logger.warn(`Error unlinking existing ${vttUserOutputName}`,e)} }
+    await execAsync(userVttCmd);
+    if (fs.existsSync(vttUserOutputName)) {
+      const vttContent = await fs.promises.readFile(vttUserOutputName, "utf-8");
+      if (vttContent && vttContent.trim().length > 0) {
+        logger.info(`[${jobId}:user-vtt] User VTT successfully downloaded. Length: ${vttContent.length}`);
+        return { fileContent: vttContent, filePath: vttUserOutputName, formatUsed: 'vtt' };
+      }
+      logger.warn(`[${jobId}:user-vtt] User VTT file downloaded but was empty. Cleaning up: ${vttUserOutputName}`);
+      try { await fs.promises.unlink(vttUserOutputName); } catch (e) {logger.warn(`Error unlinking empty ${vttUserOutputName}`,e)}
+    } else {
+      logger.info(`[${jobId}:user-vtt] No user VTT file found.`);
+    }
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.warn(`[${jobId}:user-vtt] Error during user VTT attempt: ${errorMessage}.`);
+    if (fs.existsSync(vttUserOutputName)) { try { await fs.promises.unlink(vttUserOutputName); } catch (e) {logger.warn(`Error unlinking ${vttUserOutputName} after error`,e)} }
+  }
+
+  // Attempt 3: Auto-Generated English VTT
+  const vttAutoOutputName = `${baseOutputName}.en.vtt`; // Same name as user VTT path, ensure cleanup from previous if needed
+  const autoVttCmd = `yt-dlp --no-warnings --write-auto-subs --sub-lang en --sub-format vtt --skip-download -o "${baseOutputName}.%(ext)s" "${url}"`;
+  logger.info(`[${jobId}:auto-vtt] Executing: ${autoVttCmd}`);
+  try {
+    // Ensure any remnants from a failed user VTT attempt with the same name are gone
+    if (fs.existsSync(vttAutoOutputName)) { try { await fs.promises.unlink(vttAutoOutputName); } catch (e) {logger.warn(`Error unlinking existing ${vttAutoOutputName} before auto-vtt attempt`, e)} }
+    await execAsync(autoVttCmd);
+    if (fs.existsSync(vttAutoOutputName)) {
+      const vttContent = await fs.promises.readFile(vttAutoOutputName, "utf-8");
+      if (vttContent && vttContent.trim().length > 0) {
+        logger.info(`[${jobId}:auto-vtt] Auto VTT successfully downloaded. Length: ${vttContent.length}`);
+        return { fileContent: vttContent, filePath: vttAutoOutputName, formatUsed: 'vtt' };
+      }
+      logger.warn(`[${jobId}:auto-vtt] Auto VTT file downloaded but was empty. Cleaning up: ${vttAutoOutputName}`);
+      try { await fs.promises.unlink(vttAutoOutputName); } catch (e) {logger.warn(`Error unlinking empty ${vttAutoOutputName}`,e)}
+    } else {
+      logger.info(`[${jobId}:auto-vtt] No auto VTT file found.`);
+    }
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.warn(`[${jobId}:auto-vtt] Error during auto VTT attempt: ${errorMessage}.`);
+    if (fs.existsSync(vttAutoOutputName)) { try { await fs.promises.unlink(vttAutoOutputName); } catch (e) {logger.warn(`Error unlinking ${vttAutoOutputName} after error`,e)} }
+  }
+  
+  // If all attempts failed
+  const allFailedError = "All attempts to fetch English subtitles (user SRT, user VTT, auto VTT) failed or yielded no content.";
+  logger.error(`[${jobId}] ${allFailedError}`);
+  return { fileContent: null, filePath: null, error: allFailedError, formatUsed: undefined };
+}
+
 // Process transcription jobs
 export function startTranscriptionWorker(concurrency = 5) {
   const worker = new Worker<TranscriptionJobData, TranscriptionResult>(
     QUEUE_NAMES.TRANSCRIPTION,
     async (job) => {
-      const { url, quality, fallbackOnRateLimit, callback_url, jobId } = job.data;
-      logger.info(`Processing transcription job ${jobId} for URL: ${url}`);
-      
-      // Define paths and result variables early
-      let audioPath: string | undefined;
-      let transcriptionFilePath: string | undefined;
-      let finalTranscriptionUrl: string | undefined;
+      const { url, quality, fallbackOnRateLimit, callback_url, jobId, userId } = job.data;
+      logger.info(`[${jobId}] Starting processing for URL: ${url}, Quality: ${quality}, User: ${userId}`);
 
-      // === Update DB Status to Processing ===
-      try {
-        logger.info(`Updating job ${jobId} status to 'processing' in DB`);
+      if (!userId) {
+        logger.error(`[${jobId}] Critical: userId is missing. Cannot process credits or job.`);
         await db.update(transcriptionJobs)
-          .set({ status: 'processing', updatedAt: new Date() })
+          .set({ status: 'failed', statusMessage: 'User ID missing in job data.', updatedAt: new Date() })
           .where(eq(transcriptionJobs.id, jobId));
-      } catch (dbError) {
-        logger.error(`Failed to update job ${jobId} status to 'processing' in DB:`, dbError);
-        // Decide if we should fail the job here or just log and continue?
-        // For now, log and continue, but this might lead to inconsistent states.
+        throw new Error(`User ID missing for job ${jobId}`);
       }
 
-      try {
-        // Create unique filename for this request
-        const timestamp = Date.now();
-        const tmpDir = path.join(process.cwd(), 'tmp');
-        audioPath = path.join(tmpDir, `audio_${timestamp}.mp3`);
+      let audioPath: string | undefined;
+      let actualCaptionFilePath: string | undefined;
+      let transcriptionFilePath: string | undefined;
+      let finalFileUrl: string | undefined;
+      let videoLengthMinutesActual: number | null = null;
+      let creditsChargedForDB: number | null = null;
+      let creditDeductionError: string | null = null;
+      let actualCost = 0;
+      let creditsDeductedSuccessfully = false;
+      let qualityUsed = quality;
+      let resultTextFromSrt: string | null = null;
+      let rawSubtitleContent: string | null = null;
+      let subtitleFormatUsed: 'srt' | 'vtt' | undefined = undefined;
 
-        // Make sure tmp directory exists
+        const tmpDir = path.join(process.cwd(), 'tmp');
         if (!fs.existsSync(tmpDir)) {
           fs.mkdirSync(tmpDir, { recursive: true });
         }
 
-        // Update progress for download phase
-        await job.updateProgress({ percentage: 10, stage: 'downloading', message: 'Downloading audio' });
+      try {
+        // STAGE 1: Get Video Metadata / Duration
+        logger.info(`[${jobId}] Fetching video metadata/duration for URL: ${url}`);
+        await job.updateProgress({ percentage: 5, stage: 'metadata', message: 'Fetching video information' });
         
-        try {
-          // Download audio using yt-dlp
-          logger.info(`Downloading audio from ${url}`);
-          await execAsync(`yt-dlp -x --audio-format mp3 -o "${audioPath}" "${url}"`);
-          if (!fs.existsSync(audioPath)) {
-            throw new Error('Failed to download audio from the provided URL');
-          }
-          const stats = await fs.promises.stat(audioPath);
-          logger.info(`Downloaded audio file size: ${(stats.size / (1024 * 1024)).toFixed(2)}MB`);
-        } catch (downloadError) {
-          logger.error('Download error:', downloadError);
-          throw new Error(`Failed to download video: ${downloadError}`);
-        }
+        const isYouTube = isYouTubeUrl(url);
 
-        // Update progress for transcription phase
-        await job.updateProgress({ percentage: 40, stage: 'transcribing', message: 'Transcribing audio' });
-
-        // Transcribe the audio based on requested quality
-        let qualityUsed = quality;
-        
-        try {
-          if (quality === 'premium') {
-            logger.info('Using premium Groq transcription');
-            if (!process.env.GROQ_API_KEY) {
-              throw new Error('GROQ_API_KEY is not configured on the server');
-            }
-            // Get current rate limit usage stats
-            const usageStats = rateLimitTracker.getUsageStats();
-            logger.info(`Rate limits: ${usageStats.hourlyUsed}/${usageStats.hourlyLimit} seconds used this hour`);
-            
-            try {
-              // This now returns a FILE PATH
-              transcriptionFilePath = await transcribeAudioWithGroq(audioPath);
-            } catch (groqError) {
-              const errorMessage = groqError instanceof Error ? groqError.message : String(groqError);
-              if (fallbackOnRateLimit && errorMessage.includes('rate_limit_exceeded')) {
-                logger.warn('Groq rate limit exceeded. Falling back to standard transcription...');
-                qualityUsed = 'standard';
-                // This also returns a FILE PATH
-                transcriptionFilePath = await transcribeAudio(audioPath);
-              } else {
-                throw groqError;
+        if (quality === 'caption_first' && isYouTube) {
+          try {
+            // For YouTube caption-first, get duration string only
+            const durationOutput = await execAsync(`yt-dlp --no-warnings --print duration_string --skip-download "${url}"`);
+            const durationString = durationOutput.stdout.trim();
+            if (durationString && durationString !== "NA") {
+              const parts = durationString.split(':').map(Number);
+              let durationInSeconds = 0;
+              if (parts.length === 3) { // HH:MM:SS
+                durationInSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+              } else if (parts.length === 2) { // MM:SS
+                durationInSeconds = parts[0] * 60 + parts[1];
+              } else if (parts.length === 1) { // SS
+                durationInSeconds = parts[0];
               }
+              if (durationInSeconds > 0) {
+                videoLengthMinutesActual = Math.max(1, Math.ceil(durationInSeconds / 60));
+                logger.info(`[${jobId}] YouTube video (caption-first) length: ${videoLengthMinutesActual} minutes.`);
+              } else {
+                logger.warn(`[${jobId}] Invalid duration string (${durationString}) for YouTube (caption-first).`);
+              }
+            } else {
+              logger.warn(`[${jobId}] Could not extract duration string for YouTube (caption-first), was: '${durationString}'. Proceeding without it.`);
+            }
+          } catch (durationError: unknown) {
+            const durationErrorMessage = durationError instanceof Error ? durationError.message : String(durationError);
+            logger.warn(`[${jobId}] Failed to get duration string for YouTube (caption-first): ${durationErrorMessage}. Proceeding without it.`);
+          }
+        } else {
+          // Existing metadata fetch for non-caption-first-YouTube jobs (standard, premium, or non-youtube caption_first if they somehow get here)
+        try {
+          const metadataOutput = await execAsync(`yt-dlp -j --no-warnings "${url}"`);
+          const metadata = JSON.parse(metadataOutput.stdout);
+          if (metadata && metadata.duration) {
+            const durationInSeconds = Number(metadata.duration);
+            if (!isNaN(durationInSeconds) && durationInSeconds > 0) {
+              videoLengthMinutesActual = Math.max(1, Math.ceil(durationInSeconds / 60));
+              logger.info(`[${jobId}] Video length: ${videoLengthMinutesActual} minutes.`);
+            } else {
+               logger.warn(`[${jobId}] Invalid duration (${metadata.duration}) extracted.`);
             }
           } else {
-            logger.info('Using standard open-source Whisper transcription');
-            // This returns a FILE PATH
-            transcriptionFilePath = await transcribeAudio(audioPath);
+            logger.warn(`[${jobId}] Could not extract duration for URL: ${url}.`);
           }
-        } catch (transcriptionError) {
-          logger.error('Transcription error:', transcriptionError);
-          // No need to clean up transcription file here, let main catch handle cleanup
-          throw transcriptionError;
+        } catch (metaError: unknown) {
+          const metaErrorMessage = metaError instanceof Error ? metaError.message : String(metaError);
+          logger.error(`[${jobId}] Failed to get video metadata: ${metaErrorMessage}`);
+            // If quality is not 'caption_first', this is a critical error for credit calculation.
+            // If it IS 'caption_first' but NOT YouTube (e.g. direct mp4 with caption_first, which is not intended),
+            // it would also be an issue. The upstream validation should prevent non-YouTube caption_first.
+            if (!(quality === 'caption_first' && isYouTube)) { // Fail if not (YouTube + caption_first path which handles missing duration)
+            await db.update(transcriptionJobs).set({ status: 'failed', statusMessage: `Failed to retrieve video metadata: ${metaErrorMessage}`, updatedAt: new Date() }).where(eq(transcriptionJobs.id, jobId));
+            throw new Error(`Failed to retrieve video metadata for ${jobId}: ${metaErrorMessage}`);
+          }
+            logger.warn(`[${jobId}] Proceeding for YouTube caption_first despite metadata error (already handled duration separately).`);
+          }
+        }
+        
+        // Update DB with video length if found (applies to all paths that find it)
+        if (videoLengthMinutesActual !== null) {
+            await db.update(transcriptionJobs)
+              .set({ video_length_minutes_actual: videoLengthMinutesActual, updatedAt: new Date() })
+              .where(eq(transcriptionJobs.id, jobId));
+        } else {
+            // If still null (e.g. YT caption-first duration failed), store 0 or keep null. Let's use 0 for "N/A"
+             await db.update(transcriptionJobs)
+              .set({ video_length_minutes_actual: 0, updatedAt: new Date() }) // Indicate 'Not Available' or failed fetch
+              .where(eq(transcriptionJobs.id, jobId));
+            logger.info(`[${jobId}] Video length set to 0 (N/A) in DB.`);
         }
 
-        // **** STEP: Read transcription text (needed for result object) ****
-        let transcriptionText: string;
-        if (!transcriptionFilePath || !fs.existsSync(transcriptionFilePath)) {
-          logger.error(`Transcription file path is missing or file does not exist: ${transcriptionFilePath}`);
-          throw new Error('Transcription process failed to produce a result file.');
+        // STAGE 2: Credit Calculation & Deduction
+        logger.info(`[${jobId}] Calculating credit cost for quality: ${quality}`);
+        await job.updateProgress({ percentage: 10, stage: 'credit_check', message: 'Verifying account credits' });
+        
+        let transactionType: typeof creditTransactionTypeEnum.enumValues[number];
+        const creditSystemConfig = getCreditConfig();
+
+        if (quality === 'caption_first') {
+          // For caption_first, we should also check if it's a YouTube URL.
+          // Non-YouTube caption_first should have been blocked by API/Action validation.
+          // If one gets here, it's an anomaly; proceed with fixed cost but it will likely fail at caption download.
+          if (!isYouTube) {
+            logger.warn(`[${jobId}] Processing 'caption_first' for a non-YouTube URL: ${url}. This is not the intended path.`);
+            // The job will likely fail at caption download stage.
+          }
+          transactionType = 'caption_download';
+          actualCost = creditSystemConfig.CREDITS_CAPTION_FIRST_FIXED;
+        } else if (quality === 'standard') {
+          if (videoLengthMinutesActual === null) {
+            throw new Error('Video duration unknown for standard quality.');
+          }
+          transactionType = 'standard_transcription';
+          actualCost = calculateCreditCost('standard', videoLengthMinutesActual);
+        } else if (quality === 'premium') {
+           if (videoLengthMinutesActual === null) {
+            throw new Error('Video duration unknown for premium quality.');
+          }
+          transactionType = 'premium_transcription';
+          actualCost = calculateCreditCost('premium', videoLengthMinutesActual);
+        } else {
+          throw new Error(`Unknown quality type: ${quality}`);
         }
-        try {
-          logger.info(`Reading transcription result from: ${transcriptionFilePath}`);
-          transcriptionText = await fs.promises.readFile(transcriptionFilePath, 'utf-8');
-        } catch (readFileError) {
-          logger.error(`Failed to read transcription file ${transcriptionFilePath}:`, readFileError);
-          throw new Error(`Worker failed to read result file: ${readFileError instanceof Error ? readFileError.message : String(readFileError)}`);
+        creditsChargedForDB = actualCost;
+
+        logger.info(`[${jobId}] Attempting to deduct ${actualCost} credits from user ${userId} for type: ${transactionType}`);
+        const creditResult = await performCreditTransaction(
+          userId,
+          actualCost,
+          transactionType,
+          { jobId: jobId, videoLengthMinutesCharged: videoLengthMinutesActual === null ? undefined : videoLengthMinutesActual }
+        );
+
+        if (!creditResult.success) {
+          creditDeductionError = creditResult.error || "Credit deduction failed";
+          logger.error(`[${jobId}] Credit deduction failed for user ${userId}: ${creditDeductionError}`);
+          await db.update(transcriptionJobs)
+            .set({
+              status: 'failed_insufficient_credits',
+              statusMessage: creditDeductionError,
+              credits_charged: creditsChargedForDB,
+              video_length_minutes_actual: videoLengthMinutesActual,
+              updatedAt: new Date()
+            })
+            .where(eq(transcriptionJobs.id, jobId));
+          throw new Error(creditDeductionError);
         }
 
-        // **** STEP: Determine Transcription URL for Callback ****
-        if (process.env.NODE_ENV === 'production') {
-          logger.info('Production environment detected. Preparing cloud storage URL.');
-          // --- PRODUCTION LOGIC --- 
+        creditsDeductedSuccessfully = true;
+        logger.info(`[${jobId}] Credits deducted successfully for user ${userId}. New balance: ${creditResult.newBalance}`);
+        
+        await db.update(transcriptionJobs)
+          .set({
+            status: 'processing',
+            credits_charged: actualCost,
+            video_length_minutes_actual: videoLengthMinutesActual,
+            updatedAt: new Date(),
+            statusMessage: null 
+          })
+          .where(eq(transcriptionJobs.id, jobId));
+
+        // STAGE 3: Actual Work
+        const timestamp = Date.now();
+
+        if (quality === 'caption_first' && isYouTube) {
+          actualCaptionFilePath = undefined; // Reset
+          // Use a single base name for output, yt-dlp will append .en.srt or .en.vtt
+          const captionFileBaseName = path.join(tmpDir, `${jobId}_caption`);
+
+          logger.info(`[${jobId}] Attempting to download subtitles (1.User SRT, 2.User VTT, 3.Auto VTT).`);
+          const subResult = await fetchAndProcessSubtitlesForWorker(jobId, url, captionFileBaseName);
+
+          if (subResult.fileContent && subResult.filePath && subResult.formatUsed) {
+            rawSubtitleContent = subResult.fileContent;
+            actualCaptionFilePath = subResult.filePath;
+            subtitleFormatUsed = subResult.formatUsed;
+            logger.info(`[${jobId}] Successfully downloaded subtitles as ${subtitleFormatUsed}. Path: ${actualCaptionFilePath}`);
+            } else {
+            // If subResult.fileContent is null, it means all attempts failed. Throw error from subResult.
+            const finalErrorMsg = subResult.error || 'Unknown error fetching subtitles after all attempts.'; // Fallback error
+            logger.error(`[${jobId}] Failed to fetch subtitles: ${finalErrorMsg}`);
+            throw new Error(finalErrorMsg);
+          }
+          // resultTextFromSrt = plainTextOutput; // Old variable, now using rawSubtitleContent
+        } else if (quality === 'caption_first' && !isYouTube) {
+            const nonYouTubeCaptionError = `Job ${jobId}: 'caption_first' quality is only supported for YouTube URLs. Received: ${url}`;
+            logger.error(nonYouTubeCaptionError);
+            throw new Error(nonYouTubeCaptionError);
+          }
+        else { // 'standard' or 'premium' (any URL type)
+          audioPath = path.join(tmpDir, `audio_${jobId}_${timestamp}.mp3`);
+          logger.info(`[${jobId}] Downloading audio for transcription to ${audioPath} (Quality: ${quality}, URL: ${url})`);
+          await job.updateProgress({ percentage: 30, stage: 'downloading_audio', message: 'Downloading audio file' });
           try {
-            // 1. (Placeholder) Upload transcriptionFilePath to your Blob Storage (e.g., S3, GCS, Azure)
-            // Example: const blobPath = await uploadToBlobStorage(transcriptionFilePath, `transcriptions/${job.data.jobId}.txt`);
-            // logger.info(`Uploaded transcription to blob storage at: ${blobPath}`);
-
-            // 2. (Placeholder) Generate a signed URL for the blob
-            // Example: finalTranscriptionUrl = await generateSignedUrl(blobPath, 60 * 60 * 24 * 7); // 7-day expiry
-            // logger.info(`Generated signed URL: ${finalTranscriptionUrl}`);
-            
-            // --- Replace placeholders with actual implementation --- 
-            // For now, we'll just use a placeholder string
-            finalTranscriptionUrl = `https://YOUR_BUCKET.s3.amazonaws.com/transcriptions/${job.data.jobId}.txt?signed_params=...`; // Replace with actual signed URL logic
-            logger.warn('Using placeholder signed URL for production - implement actual generation!');
-
-            // 3. (Optional Cloud Cleanup) Delete local tmp file after successful upload
-            // try {
-            //   fs.unlinkSync(transcriptionFilePath);
-            //   logger.info(`Cleaned up local transcription file after cloud upload: ${transcriptionFilePath}`);
-            // } catch (cleanupError) {
-            //   logger.warn(`Failed to cleanup local transcription file after cloud upload: ${cleanupError}`);
-            // }
-
-          } catch (cloudError) {
-            logger.error('Error during cloud storage upload/signing:', cloudError);
-            // Decide how to handle this - fail the job, or proceed without a URL?
-            // For now, let's throw to indicate a failure in the production flow.
-            throw new Error(`Failed to process transcription for cloud storage: ${cloudError instanceof Error ? cloudError.message : String(cloudError)}`);
+            await execAsync(`yt-dlp -x --no-warnings --audio-format mp3 -o "${audioPath}" "${url}"`);
+            if (!fs.existsSync(audioPath)) {
+              throw new Error('Audio file not found after download attempt.');
+            }
+            logger.info(`[${jobId}] Audio downloaded successfully to ${audioPath}`);
+          } catch (downloadError: unknown) {
+            const downloadErrorMessage = downloadError instanceof Error ? downloadError.message : String(downloadError);
+            logger.error(`[${jobId}] Audio download error: ${downloadErrorMessage}`);
+            throw new Error(`Failed to download audio for ${jobId}: ${downloadErrorMessage}`);
           }
+
+          let transcriptionFilePathForWhisper: string | undefined;
+          await job.updateProgress({ percentage: 50, stage: 'transcribing', message: 'Audio transcription in progress' });
+          try {
+            if (quality === 'premium') {
+              logger.info(`[${jobId}] Premium Groq transcription`);
+              if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY missing');
+              const usageStats = rateLimitTracker.getUsageStats();
+              logger.info(`[${jobId}] Rate limits: ${usageStats.hourlyUsed}/${usageStats.hourlyLimit}s`);
+              try {
+                transcriptionFilePathForWhisper = await transcribeAudioWithGroq(audioPath);
+              } catch (groqError: unknown) {
+                const groqErrorMessage = groqError instanceof Error ? groqError.message : String(groqError);
+                if (fallbackOnRateLimit && groqErrorMessage.includes('rate_limit_exceeded')) {
+                  logger.warn(`[${jobId}] Groq rate limit, falling to standard.`);
+                  qualityUsed = 'standard';
+                  transcriptionFilePathForWhisper = await transcribeAudio(audioPath);
+                } else { throw groqError; }
+              }
+            } else { // standard
+              logger.info(`[${jobId}] Standard Whisper transcription`);
+              transcriptionFilePathForWhisper = await transcribeAudio(audioPath);
+            }
+          } catch (transcriptionError: unknown) {
+            const transcriptionErrorMessage = transcriptionError instanceof Error ? transcriptionError.message : String(transcriptionError);
+            logger.error(`[${jobId}] Transcription error: ${transcriptionErrorMessage}`);
+            throw transcriptionError; 
+          }
+          // The resultText for standard/premium will be read from transcriptionFilePathForWhisper
+          if (!transcriptionFilePathForWhisper || !fs.existsSync(transcriptionFilePathForWhisper)) {
+            throw new Error('Whisper transcription result file path is invalid or file does not exist.');
+          }
+          resultTextFromSrt = await fs.promises.readFile(transcriptionFilePathForWhisper, 'utf-8');
+          actualCaptionFilePath = transcriptionFilePathForWhisper; 
+        }
+
+        // STAGE 4: Finalize and Cleanup
+        logger.info(`[${jobId}] Finalizing job.`);
+        await job.updateProgress({ percentage: 90, stage: 'finalizing', message: 'Preparing results' });
+
+        let textToStore: string | null = null;
+        if (quality === 'caption_first' && isYouTube) {
+          textToStore = rawSubtitleContent;
+        } else { // For standard or premium, resultTextFromSrt would have been populated by Whisper
+          textToStore = resultTextFromSrt; 
+        }
+
+        if (!textToStore) { 
+          throw new Error('Result text (caption/transcript) was not generated or retrieved.');
+        }
+        
+        const finalTranscriptionText: string = textToStore;
+        
+        if (process.env.NODE_ENV === 'production') {
+            let s3FileExtension = 'txt'; // Default for non-caption_first or if subtitleFormatUsed is undefined
+            // qualityUsed is the definitive quality after potential fallbacks (though caption_first doesn't typically fallback)
+            // subtitleFormatUsed is populated for successful caption_first downloads
+            if (qualityUsed === 'caption_first' && subtitleFormatUsed) {
+                 s3FileExtension = subtitleFormatUsed; // 'srt' or 'vtt'
+            }
+            
+            // Use the determined extension for the temporary file path
+            const tempFilePathForUpload = path.join(tmpDir, `${jobId}_upload_content.${s3FileExtension}`);
+            
+            // finalTranscriptionText already holds the raw subtitle content for caption_first jobs
+            await fs.promises.writeFile(tempFilePathForUpload, finalTranscriptionText, 'utf-8');
+            
+            // Construct the S3 file name using the correct extension from tempFilePathForUpload
+            const s3FileName = `${qualityUsed}/${jobId}_${path.basename(tempFilePathForUpload)}`;
+            finalFileUrl = `https://YOUR_BUCKET.s3.amazonaws.com/${s3FileName}`; // URL will now include .srt or .vtt
+            
+            logger.info(`[${jobId}] Production: Prepared ${s3FileExtension.toUpperCase()} content for S3. URL: ${finalFileUrl}`);
+            logger.warn(`[${jobId}] Using placeholder S3 URL for text content: ${finalFileUrl} - Implement actual upload & signing!`);
 
         } else {
-          // --- LOCAL/DEVELOPMENT LOGIC --- 
-          logger.info('Development environment detected. Using local file URL.');
-          finalTranscriptionUrl = pathToFileURL(transcriptionFilePath).toString();
-        }
-
-        // Update progress for cleanup phase (only audio file)
-        await job.updateProgress({ percentage: 90, stage: 'cleaning_up', message: 'Cleaning up temporary audio file' });
-
-        // Clean up temporary AUDIO file
-        try {
-          if (audioPath && fs.existsSync(audioPath)) {
-             fs.unlinkSync(audioPath);
-             logger.info(`Cleaned up temporary audio file: ${audioPath}`);
-          } else {
-            logger.warn(`Temporary audio file not found for cleanup: ${audioPath}`);
+          if (quality === 'caption_first' && isYouTube && actualCaptionFilePath && rawSubtitleContent && subtitleFormatUsed) {
+            // Save the raw content to a file with the correct extension
+            const finalRawSubPath = path.join(tmpDir, `${jobId}_final_raw_subs.${subtitleFormatUsed}`);
+            await fs.promises.writeFile(finalRawSubPath, rawSubtitleContent, 'utf-8');
+            finalFileUrl = pathToFileURL(finalRawSubPath).toString();
+          } else if (actualCaptionFilePath) { 
+             finalFileUrl = pathToFileURL(actualCaptionFilePath).toString();
           }
-        } catch (cleanupError) {
-          logger.error('Audio cleanup error:', cleanupError);
         }
 
-        // Update progress to indicate job has completed
-        await job.updateProgress({ percentage: 100, stage: 'completed', message: 'Job completed successfully' });
-
-        // === Update DB Status to Completed ===
-        try {
-          logger.info(`Updating job ${jobId} status to 'completed' in DB`);
           await db.update(transcriptionJobs)
             .set({
               status: 'completed',
-              transcriptionFileUrl: finalTranscriptionUrl, // Saving placeholder URL
-              transcriptionText: transcriptionText, // <<< Added: Save the actual text
+              transcriptionFileUrl: finalFileUrl,
+              transcriptionText: finalTranscriptionText,
               updatedAt: new Date(),
-              statusMessage: null, // Clear any previous error message
+              statusMessage: null, 
             })
             .where(eq(transcriptionJobs.id, jobId));
-        } catch (dbError) {
-          logger.error(`Failed to update job ${jobId} status to 'completed' in DB:`, dbError);
-          // Consider how to handle this - job might be left in processing state?
+        logger.info(`[${jobId}] Job completed successfully. Text stored in DB. File at: ${finalFileUrl}`);
+
+        // Cleanup
+        if (audioPath && fs.existsSync(audioPath)) {
+          fs.unlinkSync(audioPath);
+          logger.info(`[${jobId}] Cleaned up temporary audio file: ${audioPath}`);
+        }
+        // For caption_first, actualCaptionFilePath is the initially downloaded .srt or .vtt
+        // finalFileUrl may point to a different path if we copied it (e.g. _final_raw_subs), or the same if not copied.
+        
+        // Cleanup the initially downloaded subtitle file if it's different from the final file URL path
+        // or if finalFileUrl is not set (e.g. S3 path in prod for the text file, but local subtitle file still exists)
+        if (actualCaptionFilePath && fs.existsSync(actualCaptionFilePath)) {
+            let shouldDeleteInitial = true;
+            if (finalFileUrl && finalFileUrl.startsWith('file:')) {
+                try {
+                    const finalPath = new URL(finalFileUrl).pathname;
+                    const normalizedFinalPath = process.platform === 'win32' && finalPath.startsWith('/') ? finalPath.substring(1) : finalPath;
+                    if (path.resolve(actualCaptionFilePath) === path.resolve(normalizedFinalPath)) {
+                        shouldDeleteInitial = false; // It's the same file, will be handled by generic dev cleanup if applicable
+                    }
+                } catch (e) { logger.error(`[${jobId}] Error comparing paths for cleanup: ${e}`);}
+            }
+            if (shouldDeleteInitial) {
+                fs.unlinkSync(actualCaptionFilePath);
+                logger.info(`[${jobId}] Cleaned up temporary downloaded subtitle file: ${actualCaptionFilePath}`);
+            }
         }
 
-        // Prepare result
-        const result: TranscriptionResult = {
-          transcription: transcriptionText, // Keep text in the result object
+        if (quality === 'caption_first' && isYouTube && finalFileUrl && finalFileUrl.startsWith('file:')) {
+            try {
+                const tempRawPath = new URL(finalFileUrl).pathname;
+                const normalizedPath = process.platform === 'win32' && tempRawPath.startsWith('/') ? tempRawPath.substring(1) : tempRawPath;
+                // Ensure we are deleting the file we possibly created with _final_raw_subs or the original if no copy
+                if (fs.existsSync(normalizedPath) && (normalizedPath.includes('_final_raw_subs.') || normalizedPath === actualCaptionFilePath ) ) {
+                    // Check if it's NOT the same as actualCaptionFilePath if actualCaptionFilePath was already deleted.
+                    // However, the above block should handle deleting actualCaptionFilePath if it's different.
+                    // This block is more for the _final_raw_subs or if finalFileUrl was directly actualCaptionFilePath
+                    if (fs.existsSync(normalizedPath)){ // Re-check existence before unlinking
+                       // fs.unlinkSync(normalizedPath);
+                       // logger.info(`[${jobId}] Cleaned up temporary dev raw subtitle file: ${normalizedPath}`);
+                       // Decided to keep this file for now as it's the finalFileUrl in dev
+                    }
+                }
+            } catch (e) { logger.error('Error during specific dev raw subtitle file cleanup check', e); }
+        }
+
+        await job.updateProgress({ percentage: 100, stage: 'completed', message: 'Job processed successfully' });
+
+        const jobResult: TranscriptionResult = {
+          transcription: finalTranscriptionText,
           quality: qualityUsed,
-          jobId: job.data.jobId,
-          filePath: transcriptionFilePath // Keep local path for reference/debugging
+          jobId: jobId,
+          filePath: finalFileUrl,
         };
 
-        // Send callback if URL was provided
         if (callback_url) {
           try {
-            const callbackData: CallbackData = {
-              job_id: job.data.jobId,
-              status_code: 200,
-              status_message: "success",
+            // Construct callbackData, making response conditional
+            const callbackDataPayload: Omit<CallbackData, 'response'> & { response?: { transcription_url: string } } = {
+              job_id: jobId, 
+              status_code: 200, 
+              status_message: "success", 
               quality: qualityUsed,
-              response: {
-                transcription_url: finalTranscriptionUrl // Use the determined URL (file:/// or https://)
-              }
             };
-            const callbackSuccess = await sendCallback(callback_url, callbackData);
-            result.callback_success = callbackSuccess;
-            if (!callbackSuccess) {
-              result.callback_error = "Failed to send callback";
+            if (finalFileUrl) {
+              callbackDataPayload.response = { transcription_url: finalFileUrl };
             }
-          } catch (callbackError) {
-            logger.error(`Callback error: ${callbackError}`);
-            result.callback_success = false;
-            result.callback_error = callbackError instanceof Error ? callbackError.message : String(callbackError);
+
+            jobResult.callback_success = await sendCallback(callback_url, callbackDataPayload as CallbackData);
+            if (!jobResult.callback_success) jobResult.callback_error = "Failed to send callback after job completion";
+          } catch (cbError: unknown) { 
+             const cbErrorMessage = cbError instanceof Error ? cbError.message : String(cbError);
+             jobResult.callback_error = cbErrorMessage; 
+             logger.error(`[${jobId}] Error in success callback: ${cbErrorMessage}`);
           }
         }
-
-        // IMPORTANT: Return the result object containing the text
-        return result;
+        return jobResult;
 
       } catch (error: unknown) {
-        logger.error(`Job ${jobId} failed:`, error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error processing job.';
+        logger.error(`[${jobId}] CRITICAL FAILURE in worker: ${errorMessage}`, error instanceof Error ? error.stack : undefined);
 
-        // === Update DB Status to Failed ===
-        try {
-          logger.info(`Updating job ${jobId} status to 'failed' in DB`);
-          await db.update(transcriptionJobs)
-            .set({ status: 'failed', updatedAt: new Date() })
-            .where(eq(transcriptionJobs.id, jobId));
-        } catch (dbError) {
-          logger.error(`Failed to update job ${jobId} status to 'failed' in DB during error handling:`, dbError);
-          // Log error but proceed with throwing the original job error
-        }
-        
-        // Clean up temporary AUDIO file if it exists on error
-        try {
-          if (audioPath && fs.existsSync(audioPath)) {
-             fs.unlinkSync(audioPath);
-             logger.info(`Cleaned up temporary audio file on error: ${audioPath}`);
+        if (creditsDeductedSuccessfully && userId && actualCost > 0) {
+          logger.info(`[${jobId}] Initiating refund of ${actualCost} credits for user ${userId}.`);
+          try {
+            const refundResult = await performCreditTransaction(
+              userId,
+              actualCost,
+              'job_failure_refund',
+              { jobId: jobId, customDescription: `Refund for failed job ${jobId}: ${errorMessage.substring(0,100)}` }
+            );
+            if (refundResult.success) {
+              logger.info(`[${jobId}] Refund success for ${userId}. Balance: ${refundResult.newBalance}`);
+            } else {
+              logger.error(`[${jobId}] CRITICAL: Refund failed for ${userId}: ${refundResult.error}`);
+            }
+          } catch (refundException: unknown) {
+            const refundExcMsg = refundException instanceof Error ? refundException.message : String(refundException);
+            logger.error(`[${jobId}] CRITICAL: Refund exception for ${userId}: ${refundExcMsg}`);
           }
-        } catch (cleanupError) {
-          logger.error('Audio cleanup error during job failure:', cleanupError);
         }
         
-        // NOTE: We are NOT cleaning up the transcriptionFilePath on error,
-        // as it might be useful for debugging or manual retrieval.
-        // Implement a separate cleanup strategy for these files later.
+        const currentJob = await db.select({ status: transcriptionJobs.status }).from(transcriptionJobs).where(eq(transcriptionJobs.id, jobId)).limit(1);
+        if (currentJob && currentJob[0] && currentJob[0].status !== 'failed_insufficient_credits') {
+            await db.update(transcriptionJobs)
+              .set({
+                  status: 'failed',
+                  statusMessage: creditDeductionError || errorMessage,
+                  credits_charged: creditsChargedForDB,
+                  video_length_minutes_actual: videoLengthMinutesActual,
+                  updatedAt: new Date()
+              })
+              .where(eq(transcriptionJobs.id, jobId));
+        } else if (!currentJob || currentJob.length === 0) {
+            logger.error(`[${jobId}] Failed to retrieve job from DB during error handling.`);
+        }
 
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        if (audioPath && fs.existsSync(audioPath)) { fs.unlinkSync(audioPath); }
+        if (actualCaptionFilePath && fs.existsSync(actualCaptionFilePath)) { 
+          // This might be redundant if the new cleanup logic above is comprehensive
+          // fs.unlinkSync(actualCaptionFilePath);
+          // logger.info(`[${jobId}] Cleaned up temporary caption/text file: ${actualCaptionFilePath}`);
+        }
+        if (transcriptionFilePath && transcriptionFilePath !== actualCaptionFilePath && fs.existsSync(transcriptionFilePath)) {
+            fs.unlinkSync(transcriptionFilePath);
+        }
         
-        // Prepare data for error callback (no result needed here)
         if (callback_url) {
           try {
-            const callbackData = {
-              job_id: job.data.jobId,
-              status_code: 500,
-              status_message: "error",
-              quality: quality, // Original requested quality
-              error: errorMessage
-            };
-            // We still try to send the callback, but don't store the success/failure
-            // in the result object which won't be returned.
-            await sendCallback(callback_url, callbackData);
-          } catch (callbackError) {
-            logger.error(`Error sending error callback: ${callbackError}`);
-          }
+                const callbackErrorData: CallbackData = {
+                    job_id: jobId, status_code: 500, status_message: "error",
+                    quality: quality, error: errorMessage
+                };
+                await sendCallback(callback_url, callbackErrorData);
+            } catch (cbError: unknown) {
+                const cbErrorMessage = cbError instanceof Error ? cbError.message : String(cbError);
+                logger.error(`[${jobId}] Error sending error callback: ${cbErrorMessage}`);
+            }
         }
-        
-        // *** IMPORTANT: Throw the error instead of returning an error object ***
-        // This ensures BullMQ marks the job as 'failed'
-        throw error instanceof Error ? error : new Error(errorMessage);
+        throw error;
       }
     },
     {
@@ -416,10 +714,9 @@ export function startTranscriptionWorker(concurrency = 5) {
     }
   );
 
-  // Handle worker events with proper typing (modified handler)
   worker.on('completed', (job, result: TranscriptionResult | undefined) => {
     if (job && result) {
-      if (result.error) { // Check the RETURNED result object for an error field
+      if (result.error) { 
         logger.error(`Job ${job.id} completed with error in result: ${result.error}`);
       } else {
         logger.info(`Job ${job.id} completed successfully (returned result)`);
@@ -431,9 +728,9 @@ export function startTranscriptionWorker(concurrency = 5) {
 
   worker.on('failed', (job, error) => {
     if (job) {
-      logger.error(`Job ${job.id} failed with error: ${error.message}`);
+      logger.error(`Job ${job.id} (BullMQ state: failed) FINALIZED. Error: ${error.message}. Check logs for refund status and DB state.`);
     } else {
-      logger.error(`Job failed with error: ${error.message}`);
+      logger.error(`A job FINALIZED as (BullMQ state: failed). Error: ${error.message}`);
     }
   });
 
@@ -444,11 +741,14 @@ export function startTranscriptionWorker(concurrency = 5) {
   return worker;
 }
 
-// Setup cleanup for graceful shutdown
 process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received, closing transcription queue.');
   await transcriptionQueue.close();
+  process.exit(0);
 });
 
 process.on('SIGINT', async () => {
+  logger.info('SIGINT received, closing transcription queue.');
   await transcriptionQueue.close();
+  process.exit(0);
 }); 
