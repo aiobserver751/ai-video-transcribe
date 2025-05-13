@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Providers } from "@/components/providers";
-import { UserProfileProvider } from "@/context/UserProfileContext";
+import { UserProfileProvider, AppQueryClientProvider } from "@/context/UserProfileContext";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -37,10 +37,12 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <UserProfileProvider>
-            {children}
-            <SonnerToaster richColors closeButton />
-          </UserProfileProvider>
+          <AppQueryClientProvider>
+            <UserProfileProvider>
+              {children}
+              <SonnerToaster richColors closeButton />
+            </UserProfileProvider>
+          </AppQueryClientProvider>
         </Providers>
       </body>
     </html>

@@ -1,23 +1,24 @@
 'use client';
 
-import React, { createContext, useState, useEffect, useContext, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, ReactNode } from 'react';
 import { getUserProfile } from '@/app/actions/userActions';
 import { users } from '@/server/db/schema';
 import { InferSelectModel } from 'drizzle-orm';
 import { useSession } from 'next-auth/react';
+import { useQuery, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Define the shape of the user profile data
 export type UserProfile = InferSelectModel<typeof users>;
 
 // Define the shape of the context value
 interface UserProfileContextType {
-    profile: UserProfile | null;
+    profile: UserProfile | null | undefined;
     isLoading: boolean;
-    error: string | null;
-    refetchProfile: () => Promise<void>; // Function to manually trigger a refetch
+    error: Error | null;
+    refetchProfile: () => void;
 }
 
-// Create the context with a default value (usually undefined or null)
+// Create the context with a default value
 const UserProfileContext = createContext<UserProfileContextType | undefined>(undefined);
 
 // Define the props for the provider component
@@ -25,49 +26,55 @@ interface UserProfileProviderProps {
     children: ReactNode;
 }
 
+// It's good practice to create the QueryClient instance outside the component
+// or ensure it's memoized if created inside, but for a context provider
+// that wraps a significant part of the app, creating it once here is fine.
+// If this provider is used multiple times independently, QueryClient should be lifted higher.
+const queryClient = new QueryClient();
+
+export const AppQueryClientProvider: React.FC<{ children: ReactNode }> = ({ children }) => (
+    <QueryClientProvider client={queryClient}>
+        {children}
+    </QueryClientProvider>
+);
+
 // Create the provider component
 export const UserProfileProvider: React.FC<UserProfileProviderProps> = ({ children }) => {
     const { data: session, status } = useSession();
-    const [profile, setProfile] = useState<UserProfile | null>(null);
-    const [isLoading, setIsLoading] = useState<boolean>(true);
-    const [error, setError] = useState<string | null>(null);
+    const isAuthenticated = status === 'authenticated' && !!session?.user?.id;
 
-    // Function to fetch the profile
-    const fetchProfile = useCallback(async () => {
-        console.log("UserProfileProvider: Fetching profile...");
-        setIsLoading(true);
-        setError(null);
-        try {
-            const profileData = await getUserProfile();
-            console.log("UserProfileProvider: Profile fetched", profileData);
-            setProfile(profileData);
-        } catch (err: unknown) {
-            console.error("UserProfileProvider: Error fetching profile", err);
-            const message = err instanceof Error ? err.message : "An unknown error occurred.";
-            setError(message);
-            setProfile(null); // Clear profile on error
-        }
-        setIsLoading(false);
-    }, []);
+    const { 
+        data: profileData, 
+        isLoading, 
+        error, 
+        refetch 
+    } = useQuery<UserProfile | null, Error>({
+        queryKey: ['userProfile', session?.user?.id],
+        queryFn: async () => {
+            console.log("UserProfileProvider (React Query): Fetching profile...");
+            if (!isAuthenticated) {
+                return null;
+            }
+            try {
+                const profile = await getUserProfile();
+                console.log("UserProfileProvider (React Query): Profile fetched", profile);
+                return profile;
+            } catch (err) {
+                console.error("UserProfileProvider (React Query): Error fetching profile", err);
+                throw err;
+            }
+        },
+        enabled: isAuthenticated,
+        refetchInterval: 5000,
+        staleTime: 3000,
+        refetchOnWindowFocus: true,
+    });
 
-    // Fetch profile when session is authenticated
-    useEffect(() => {
-        if (status === 'authenticated' && session?.user?.id) {
-            console.log("Session authenticated, fetching profile");
-            fetchProfile();
-        } else if (status === 'unauthenticated') {
-            console.log("Session unauthenticated, clearing profile");
-            setProfile(null);
-            setIsLoading(false);
-        }
-    }, [status, session, fetchProfile]);
-
-    // Value provided by the context
     const value = {
-        profile,
+        profile: profileData,
         isLoading,
         error,
-        refetchProfile: fetchProfile, // Provide the fetch function for manual refetching
+        refetchProfile: refetch,
     };
 
     return (
