@@ -3,6 +3,7 @@ import { db } from "@/server/db"; // Adjust path to your db instance
 import { transcriptionJobs } from "@/server/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { getAuthSession, validateApiKey } from "@/lib/auth"; // Import session & apiKey utilities
+import { logger } from '../../../lib/logger';
 
 export async function GET(request: NextRequest) { // Use NextRequest to access headers
   let userId: string | null = null;
@@ -33,11 +34,11 @@ export async function GET(request: NextRequest) { // Use NextRequest to access h
 
   // 3. If neither worked, deny access
   if (userId === null) {
-    console.log("API /api/jobs: Unauthorized access attempt.");
+    logger.warn("[JobsAPI] API /api/jobs: Unauthorized access attempt.");
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  console.log(`API /api/jobs called by User ID: ${userId} (Auth: ${authSource})`);
+  logger.info(`[JobsAPI] API /api/jobs called by User ID: ${userId} (Auth: ${authSource})`);
 
   try {
     // --- Database Fetch ---
@@ -52,8 +53,8 @@ export async function GET(request: NextRequest) { // Use NextRequest to access h
     return NextResponse.json(userJobs);
 
   } catch (error) {
-    console.error("Failed to fetch jobs:", error);
+    logger.error("[JobsAPI] Failed to fetch jobs:", error);
     // Return a generic server error response
-    return new NextResponse("Internal Server Error", { status: 500 });
+    return new NextResponse("Internal ServerError", { status: 500 });
   }
 } 

@@ -30,6 +30,7 @@ import {
 import { format } from 'date-fns';
 import { useUserProfile } from '@/context/UserProfileContext';
 import Link from 'next/link';
+import { displayToast } from "@/lib/toastUtils";
 
 // Interface for the shape of API key metadata returned by listApiKeys
 interface ApiKeyMetadata {
@@ -65,13 +66,17 @@ export default function SettingsPage() {
         setApiKeysList(result.keys);
       } else {
         setError(result.error || 'Failed to load API keys.');
-        toast.error("Error", { description: result.error || 'Failed to load API keys.' });
+        if (result.error) {
+            toast.error("Error", { description: result.error });
+        } else {
+            displayToast("settingsPage.loadApiKeysError", "error");
+        }
       }
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
       const fetchError = `An unexpected error occurred while fetching API keys: ${errorMessage}`;
       setError(fetchError);
-      toast.error("Error", { description: fetchError });
+      displayToast("settingsPage.loadApiKeysUnexpectedError", "error", { errorMessage });
     } finally {
       setIsLoadingKeys(false);
     }
@@ -90,7 +95,7 @@ export default function SettingsPage() {
 
     const trimmedName = newKeyName.trim();
     if (!trimmedName) {
-      toast.error("Validation Error", { description: "API key name cannot be empty." });
+      displayToast("settingsPage.apiKeyNameEmptyError", "error");
       setError("API key name cannot be empty.");
       setIsLoadingGenerate(false);
       return;
@@ -100,18 +105,22 @@ export default function SettingsPage() {
       const result = await generateApiKey(trimmedName);
       if (result.success && result.apiKey) {
         setNewlyGeneratedKey(result.apiKey.key);
-        toast.success("API Key Generated", { description: "Your new API key has been generated. Copy it now, it won't be shown again!" });
+        displayToast("settingsPage.apiKeyGeneratedSuccess", "success");
         setNewKeyName(''); // Clear input
         await fetchKeys(); // Refresh the list
       } else {
         setError(result.error || 'Failed to generate API key.');
-        toast.error("Error", { description: result.error || 'Failed to generate API key.' });
+        if (result.error) {
+            toast.error("Error", { description: result.error });
+        } else {
+            displayToast("settingsPage.generateApiKeyFailedError", "error");
+        }
       }
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
       const genError = `An unexpected error occurred during key generation: ${errorMessage}`;
       setError(genError);
-      toast.error("Error", { description: genError });
+      displayToast("settingsPage.generateApiKeyUnexpectedError", "error", { errorMessage });
     } finally {
       setIsLoadingGenerate(false);
     }
@@ -124,17 +133,21 @@ export default function SettingsPage() {
     try {
       const result = await revokeApiKey(keyId);
       if (result.success) {
-        toast.success("API Key Revoked", { description: "The API key has been successfully revoked." });
+        displayToast("settingsPage.apiKeyRevokedSuccess", "success");
         await fetchKeys(); // Refresh the list
       } else {
         setError(result.error || 'Failed to revoke API key.');
-        toast.error("Error", { description: result.error || 'Failed to revoke API key.' });
+        if (result.error) {
+            toast.error("Error", { description: result.error });
+        } else {
+            displayToast("settingsPage.revokeApiKeyFailedError", "error");
+        }
       }
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
       const revokeError = `An unexpected error occurred while revoking the key: ${errorMessage}`;
       setError(revokeError);
-      toast.error("Error", { description: revokeError });
+      displayToast("settingsPage.revokeApiKeyUnexpectedError", "error", { errorMessage });
     } finally {
       setIsLoadingRevoke(null);
     }
@@ -143,8 +156,8 @@ export default function SettingsPage() {
   const handleCopyKey = () => {
     if (newlyGeneratedKey) {
       navigator.clipboard.writeText(newlyGeneratedKey)
-        .then(() => toast.success("Copied!", { description: "API Key copied to clipboard." }))
-        .catch(() => toast.error("Copy Failed", { description: "Could not copy key to clipboard." }));
+        .then(() => displayToast("settingsPage.copyApiKeySuccess", "success"))
+        .catch(() => displayToast("settingsPage.copyApiKeyFailed", "error"));
     }
   };
 

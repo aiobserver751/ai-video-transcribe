@@ -23,10 +23,14 @@ export async function getJobDetails(jobId: string): Promise<TranscriptionJob | n
         origin: transcriptionJobs.origin,
         statusMessage: transcriptionJobs.statusMessage,
         transcriptionText: transcriptionJobs.transcriptionText,
+        srtFileText: transcriptionJobs.srt_file_text,
+        vttFileText: transcriptionJobs.vtt_file_text,
         createdAt: transcriptionJobs.createdAt,
         updatedAt: transcriptionJobs.updatedAt,
         userId: transcriptionJobs.userId,
         transcriptionFileUrl: transcriptionJobs.transcriptionFileUrl,
+        srtFileUrl: transcriptionJobs.srtFileUrl,
+        vttFileUrl: transcriptionJobs.vttFileUrl,
         video_length_minutes_actual: transcriptionJobs.video_length_minutes_actual,
         credits_charged: transcriptionJobs.credits_charged
       })
@@ -53,8 +57,12 @@ export async function getJobDetails(jobId: string): Promise<TranscriptionJob | n
       // Ensure other optional fields are handled (e.g., ?? null)
       statusMessage: job.statusMessage ?? null,
       transcriptionText: job.transcriptionText ?? null,
+      srtFileText: job.srtFileText ?? null,
+      vttFileText: job.vttFileText ?? null,
       userId: job.userId ?? null,
       transcriptionFileUrl: job.transcriptionFileUrl ?? null,
+      srtFileUrl: job.srtFileUrl ?? null,
+      vttFileUrl: job.vttFileUrl ?? null,
     } as TranscriptionJob; // Cast is okay if you are sure of the shape
 
   } catch (error) {

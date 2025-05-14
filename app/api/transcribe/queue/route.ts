@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Note: We don't need userId from the body anymore, we use the one from the API key
-    const { url, quality, fallbackOnRateLimit = true, callback_url } = await request.json();
+    const { url, quality, fallbackOnRateLimit = true, callback_url, response_format: requested_response_format } = await request.json();
 
     if (!url) {
       return NextResponse.json(
@@ -129,6 +129,23 @@ export async function POST(request: NextRequest) {
       );
     }
     const requestedQuality = quality as typeof qualityEnum.enumValues[number]; // Type assertion after validation
+
+    // Validate and set response_format, defaulting to verbose
+    let response_format: 'plain_text' | 'url' | 'verbose' = 'verbose';
+    if (requested_response_format) {
+      if (['plain_text', 'url', 'verbose'].includes(requested_response_format)) {
+        response_format = requested_response_format as 'plain_text' | 'url' | 'verbose';
+      } else {
+        return NextResponse.json(
+          {
+            error: "Invalid response_format parameter. Must be one of: plain_text, url, verbose",
+            status_code: 400,
+            status_message: 'Bad Request'
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     // Conditional YouTube URL validation for 'caption_first' quality
     if (requestedQuality === 'caption_first') {
@@ -188,7 +205,8 @@ export async function POST(request: NextRequest) {
         fallbackOnRateLimit,
         userId: authenticatedUserId,
         apiKey: apiKey, 
-        callback_url
+        callback_url,
+        response_format: response_format // Pass the validated or default response_format
       },
       jobPriority // Use the determined jobPriority
     );
@@ -313,6 +331,11 @@ export async function GET(request: NextRequest) {
           transcription: jobStatus.result.transcription,
           quality: jobStatus.result.quality,
           job_id: jobId,
+          transcriptionFileUrl: jobStatus.result.filePath,
+          srtFileUrl: jobStatus.result.srtFileUrl,
+          vttFileUrl: jobStatus.result.vttFileUrl,
+          srtFileText: jobStatus.result.srtFileText,
+          vttFileText: jobStatus.result.vttFileText,
           callback_status: jobStatus.result.callback_success ? 'success' : 'not_sent',
           callback_error: jobStatus.result.callback_error,
           status_code: 200,

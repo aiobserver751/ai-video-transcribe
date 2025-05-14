@@ -132,8 +132,15 @@ export const transcriptionJobs = pgTable('transcription_jobs', {
   status: jobStatusEnum('status').default('pending').notNull(), // Uses updated enum
   origin: jobOriginEnum('origin').notNull(),
   statusMessage: text('status_message'),
-  transcriptionFileUrl: text('transcription_file_url'),
+  
+  // URLs for the stored transcription files
+  transcriptionFileUrl: text('transcription_file_url'), // URL to the primary raw file (e.g., original SRT/VTT from YouTube, TXT from Whisper)
+  srtFileUrl: text('srt_file_url'),                     // URL to the SRT file
+  vttFileUrl: text('vtt_file_url'),                     // URL to the VTT file
+
   transcriptionText: text('transcription_text'),
+  srt_file_text: text('srt_file_text'), // New field for SRT content
+  vtt_file_text: text('vtt_file_text'), // New field for VTT content
   createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   // NEW Fields for credit system

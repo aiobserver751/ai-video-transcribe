@@ -3,6 +3,7 @@ import { db } from "@/server/db"; // Adjust path to your db instance
 import { transcriptionJobs } from "@/server/db/schema";
 import { eq, and } from "drizzle-orm";
 import { getAuthSession, validateApiKey } from "@/lib/auth"; // Import session & apiKey utilities
+import { logger } from '../../../../lib/logger';
 
 interface RouteContext {
   params: {
@@ -44,11 +45,11 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
   // 3. If neither worked, deny access
   if (userId === null) {
-     console.log(`API /api/jobs/${jobId}: Unauthorized access attempt.`);
+     logger.warn(`[JobsAPI] API /api/jobs/${jobId}: Unauthorized access attempt.`);
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  console.log(`API /api/jobs/${jobId} called by User ID: ${userId} (Auth: ${authSource})`);
+  logger.info(`[JobsAPI] API /api/jobs/${jobId} called by User ID: ${userId} (Auth: ${authSource})`);
 
   try {
     // --- Database Fetch ---
@@ -70,7 +71,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     return NextResponse.json(job);
 
   } catch (error) {
-    console.error(`Failed to fetch job ${jobId}:`, error);
+    logger.error(`[JobsAPI] Failed to fetch job ${jobId}:`, error);
     // Return a generic server error response
     return new NextResponse("Internal Server Error", { status: 500 });
   }

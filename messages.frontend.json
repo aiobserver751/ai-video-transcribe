@@ -1,0 +1,108 @@
+{
+  "toasts": {
+    "submitJobForm": {
+      "youtubeUrlRequiredForCaptionFirst": {
+        "title": null,
+        "description": "For 'Caption First' quality, a valid YouTube URL is required."
+      },
+      "captionsNotAvailableForCaptionFirst": {
+        "title": null,
+        "description": "Cannot submit: Captions are not available for this video for 'Caption First' quality."
+      },
+      "checkingCaptionAvailability": {
+        "title": null,
+        "description": "Please wait, still checking for caption availability."
+      },
+      "jobSubmittedSuccess": {
+        "title": null,
+        "description": "Job {jobId} submitted successfully!"
+      },
+      "jobSubmitFailed": {
+        "title": null,
+        "description": "Failed to submit job."
+      }
+    },
+    "signInPage": {
+      "signInSuccess": {
+        "title": null,
+        "description": "Sign in successful!"
+      }
+    },
+    "homePage": {
+      "demoLoginSuccess": {
+        "title": null,
+        "description": "Demo login successful!"
+      }
+    },
+    "signUpPage": {
+      "registrationFailed": {
+        "title": "Registration Failed",
+        "description": "{message}"
+      }
+    },
+    "settingsPage": {
+      "loadApiKeysError": {
+        "title": "Error",
+        "description": "Failed to load API keys."
+      },
+      "loadApiKeysUnexpectedError": {
+        "title": "Error",
+        "description": "An unexpected error occurred while fetching API keys: {errorMessage}"
+      },
+      "apiKeyNameEmptyError": {
+        "title": "Validation Error",
+        "description": "API key name cannot be empty."
+      },
+      "apiKeyGeneratedSuccess": {
+        "title": "API Key Generated",
+        "description": "Your new API key has been generated. Copy it now, it won't be shown again!"
+      },
+      "generateApiKeyFailedError": {
+        "title": "Error",
+        "description": "Failed to generate API key."
+      },
+      "generateApiKeyUnexpectedError": {
+        "title": "Error",
+        "description": "An unexpected error occurred during key generation: {errorMessage}"
+      },
+      "apiKeyRevokedSuccess": {
+        "title": "API Key Revoked",
+        "description": "The API key has been successfully revoked."
+      },
+      "revokeApiKeyFailedError": {
+        "title": "Error",
+        "description": "Failed to revoke API key."
+      },
+      "revokeApiKeyUnexpectedError": {
+        "title": "Error",
+        "description": "An unexpected error occurred while revoking the key: {errorMessage}"
+      },
+      "copyApiKeySuccess": {
+        "title": "Copied!",
+        "description": "API Key copied to clipboard."
+      },
+      "copyApiKeyFailed": {
+        "title": "Copy Failed",
+        "description": "Could not copy key to clipboard."
+      }
+    },
+    "billingPage": {
+      "checkoutError": {
+        "title": "Checkout Error",
+        "description": "{error}"
+      },
+      "checkoutUrlError": {
+        "title": "Checkout Error",
+        "description": "Could not retrieve checkout URL."
+      },
+      "billingPortalError": {
+        "title": "Billing Portal Error",
+        "description": "{error}"
+      },
+      "billingPortalUrlError": {
+        "title": "Billing Portal Error",
+        "description": "Could not retrieve portal URL."
+      }
+    }
+  }
+} 

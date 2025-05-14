@@ -2,6 +2,7 @@ import { drizzle } from 'drizzle-orm/neon-http';
 import { neon } from '@neondatabase/serverless'; // Import neon function
 import * as schema from './schema.ts';
 import * as dotenv from 'dotenv';
+import { logger } from '@/lib/logger'; // Added logger import
 
 dotenv.config({ path: '.env' });
 
@@ -22,9 +23,9 @@ async function testConnection() {
   try {
     // Use Drizzle's built-in query function for testing
     await db.execute('SELECT NOW()');
-    console.log('Neon Database connected successfully via Drizzle');
+    logger.info('[Database] Neon Database connected successfully via Drizzle');
   } catch (error) {
-    console.error('Neon Database connection failed:', error);
+    logger.error('[Database] Neon Database connection failed:', error);
     process.exit(1);
   }
 }

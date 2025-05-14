@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { z } from 'zod';
 import { logger } from "@/lib/logger"; // Assuming you might want to use logger here too
 
-console.log('Credit Service DB instance:', db ? 'Loaded' : 'Not Loaded'); // DIAGNOSTIC LOG
+logger.info('[CreditService] Credit Service DB instance:', db ? 'Loaded' : 'Not Loaded'); // DIAGNOSTIC LOG
 
 // --- Environment Variable Loading & Validation ---
 const creditEnvSchema = z.object({FREE_TIER_INITIAL_CREDITS: z.coerce.number().int().positive(), FREE_TIER_REFRESH_CREDITS: z.coerce.number().int().positive(),FREE_TIER_REFRESH_INTERVAL_DAYS: z.coerce.number().int().positive(),  FREE_TIER_MAX_CREDITS: z.coerce.number().int().positive(),STARTER_TIER_MONTHLY_CREDITS: z.coerce.number().int().positive(),  PRO_TIER_MONTHLY_CREDITS: z.coerce.number().int().positive(),  CREDITS_CAPTION_FIRST_FIXED: z.coerce.number().int().positive(),  CREDITS_PER_10_MIN_STANDARD: z.coerce.number().int().positive(),  CREDITS_PER_10_MIN_PREMIUM: z.coerce.number().int().positive(),  CREDITS_BASIC_SUMMARY_FIXED: z.coerce.number().int().positive(),  CREDITS_EXTENDED_SUMMARY_FIXED: z.coerce.number().int().positive(),});
@@ -27,7 +27,7 @@ export function getCreditConfig() {
         CREDITS_EXTENDED_SUMMARY_FIXED: process.env.CREDITS_EXTENDED_SUMMARY_FIXED,
       });
     } catch (error) {
-      logger.error("Invalid credit system environment variables:", error); // Changed to logger
+      logger.error("[CreditService] Invalid credit system environment variables:", error); // Changed to logger
       throw new Error("Credit system configuration is invalid. Check environment variables.");
     }
   }
@@ -45,7 +45,7 @@ export function calculateCreditCost(
     case 'standard':
       if (videoLengthMinutesActual === null || videoLengthMinutesActual < 0) {
         // Consider logging this error before throwing
-        logger.warn('Valid video length is required for Standard quality transcription cost calculation.');
+        logger.warn('[CreditService] Valid video length is required for Standard quality transcription cost calculation.');
         throw new Error('Valid video length is required for Standard quality transcription cost calculation.');
       }
       const blocksStandard = Math.max(1, Math.ceil(videoLengthMinutesActual / 10));
@@ -53,13 +53,13 @@ export function calculateCreditCost(
     case 'premium':
       if (videoLengthMinutesActual === null || videoLengthMinutesActual < 0) {
         // Consider logging this error before throwing
-        logger.warn('Valid video length is required for Premium quality transcription cost calculation.');
+        logger.warn('[CreditService] Valid video length is required for Premium quality transcription cost calculation.');
         throw new Error('Valid video length is required for Premium quality transcription cost calculation.');
       }
       const blocksPremium = Math.max(1, Math.ceil(videoLengthMinutesActual / 10));
       return blocksPremium * config.CREDITS_PER_10_MIN_PREMIUM;
     default:
-      logger.error(`Unknown job quality for credit calculation: ${jobQuality}`);
+      logger.error(`[CreditService] Unknown job quality for credit calculation: ${jobQuality}`);
       throw new Error(`Unknown job quality for credit calculation: ${jobQuality}`);
   }
 }
@@ -87,7 +87,7 @@ export async function performCreditTransaction(
   const config = getCreditConfig();
 
   if (transactionAmount < 0) {
-    logger.warn(`performCreditTransaction called with negative amount: ${transactionAmount} for user ${userId}`);
+    logger.warn(`[CreditService] performCreditTransaction called with negative amount: ${transactionAmount} for user ${userId}`);
     return { success: false, error: "Transaction amount cannot be negative." };
   }
 
@@ -106,7 +106,7 @@ export async function performCreditTransaction(
       .limit(1);
 
     if (!currentUserArray || currentUserArray.length === 0) {
-      logger.error(`performCreditTransaction: User not found with ID ${userId}`);
+      logger.error(`[CreditService] performCreditTransaction: User not found with ID ${userId}`);
       // Since we're not in a transaction, no need to throw to rollback. Return error directly.
       return { success: false, error: "User not found." }; 
     }
@@ -142,7 +142,7 @@ export async function performCreditTransaction(
       }
     } else { // Deduction
       if (creditsBefore < actualAmountProcessed) {
-        logger.warn(`performCreditTransaction: Insufficient credits for user ${userId}. Has ${creditsBefore}, needs ${actualAmountProcessed}. Type: ${transactionType}`);
+        logger.warn(`[CreditService] performCreditTransaction: Insufficient credits for user ${userId}. Has ${creditsBefore}, needs ${actualAmountProcessed}. Type: ${transactionType}`);
         return { success: false, error: "Insufficient credits." };
       }
       creditsAfter = creditsBefore - actualAmountProcessed;
@@ -151,7 +151,7 @@ export async function performCreditTransaction(
     if (creditsAfter < 0) {
       // This should ideally be caught by 'Insufficient credits' for deductions,
       // or calculations for additions should prevent this.
-      logger.error(`performCreditTransaction: Calculated negative balance for user ${userId}. Before: ${creditsBefore}, Amount: ${actualAmountProcessed}, Type: ${transactionType}, After: ${creditsAfter}`);
+      logger.error(`[CreditService] performCreditTransaction: Calculated negative balance for user ${userId}. Before: ${creditsBefore}, Amount: ${actualAmountProcessed}, Type: ${transactionType}, After: ${creditsAfter}`);
       return { success: false, error: "Credit balance calculation resulted in a negative value." };
     }
 
@@ -161,9 +161,9 @@ export async function performCreditTransaction(
         .update(users)
         .set({ credit_balance: creditsAfter })
         .where(eq(users.id, userId));
-      logger.info(`Updated credit balance for user ${userId} from ${creditsBefore} to ${creditsAfter}`);
+      logger.info(`[CreditService] Updated credit balance for user ${userId} from ${creditsBefore} to ${creditsAfter}`);
     } else {
-      logger.info(`Credit balance for user ${userId} remains ${creditsBefore} (no change needed). Type: ${transactionType}, Amount: ${actualAmountProcessed}`);
+      logger.info(`[CreditService] Credit balance for user ${userId} remains ${creditsBefore} (no change needed). Type: ${transactionType}, Amount: ${actualAmountProcessed}`);
     }
 
     // Update refresh timestamp only if credits were actually added during a free refresh
@@ -172,7 +172,7 @@ export async function performCreditTransaction(
         .update(users)
         .set({ credits_refreshed_at: new Date() })
         .where(eq(users.id, userId));
-      logger.info(`Updated credits_refreshed_at for user ${userId} due to ${transactionType}`);
+      logger.info(`[CreditService] Updated credits_refreshed_at for user ${userId} due to ${transactionType}`);
     }
 
     const description = details.customDescription ||
@@ -196,14 +196,14 @@ export async function performCreditTransaction(
         .returning({ id: creditTransactions.id });
       
       if (!newTransaction?.id) {
-        logger.error(`performCreditTransaction: Failed to insert credit transaction log for user ${userId} and type ${transactionType}, but balance may have been updated.`);
+        logger.error(`[CreditService] performCreditTransaction: Failed to insert credit transaction log for user ${userId} and type ${transactionType}, but balance may have been updated.`);
         // Return success:true because the primary goal (balance update, if any) might have succeeded.
         // The caller (e.g. Auth event) might not need to fail entirely due to logging issue.
         // However, this is a data integrity concern that should be monitored.
         return { success: true, newBalance: creditsAfter, error: "Failed to log transaction, but balance updated." };
       }
       transactionId = newTransaction.id;
-      logger.info(`Logged credit transaction ${transactionId} for user ${userId}. Type: ${transactionType}, Amount: ${actualAmountProcessed}`);
+      logger.info(`[CreditService] Logged credit transaction ${transactionId} for user ${userId}. Type: ${transactionType}, Amount: ${actualAmountProcessed}`);
     }
 
     return {
@@ -213,7 +213,7 @@ export async function performCreditTransaction(
     };
 
   } catch (error) {
-    logger.error(`Critical error in performCreditTransaction for user ${userId}, type ${transactionType}:`, error);
+    logger.error(`[CreditService] Critical error in performCreditTransaction for user ${userId}, type ${transactionType}:`, error);
     let errorMessage = "An unexpected error occurred during the credit transaction.";
     if (error instanceof Error) {
       errorMessage = error.message;

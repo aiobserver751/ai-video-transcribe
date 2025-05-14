@@ -3,20 +3,20 @@ import { logger } from '../lib/logger.js';
 
 async function main() {
   try {
-    logger.info('Initializing queue workers...');
+    logger.info('[WorkerInit] Initializing queue workers...');
     const workers = initializeQueueWorkers();
-    logger.info('Queue workers initialized successfully');
+    logger.info('[WorkerInit] Queue workers initialized successfully');
     
     // Keep the process running
     process.on('SIGINT', async () => {
-      logger.info('Shutting down workers...');
+      logger.info('[WorkerInit] Shutting down workers...');
       if (workers) {
         await workers.transcriptionWorker.close();
       }
       process.exit(0);
     });
   } catch (error) {
-    logger.error('Failed to initialize workers:', error);
+    logger.error('[WorkerInit] Failed to initialize workers:', error);
     process.exit(1);
   }
 }

@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toast } from "sonner";
 import { Loader2, Chrome } from 'lucide-react';
+import { displayToast } from "@/lib/toastUtils";
 
 export default function SignInPage() {
     const router = useRouter();
@@ -55,7 +55,7 @@ export default function SignInPage() {
                 }
                 setIsLoading(false);
             } else if (result?.ok) {
-                toast.success('Sign in successful!')
+                displayToast("signInPage.signInSuccess", "success");
                 // Redirect to dashboard or callbackUrl on successful sign-in
                 router.push(result.url ?? '/dashboard');
                 // Don't set isLoading false here as we are navigating away

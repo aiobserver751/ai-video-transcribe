@@ -3,12 +3,12 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { toast } from "sonner";
 import LandingHero from "@/components/landing/LandingHero";
 import LandingFeatures from "@/components/landing/LandingFeatures";
 import LandingPricing from "@/components/landing/PricingSection";
 import LandingNavbar from "@/components/landing/LandingNavbar";
 import LandingFooter from "@/components/landing/LandingFooter";
+import { displayToast } from "@/lib/toastUtils";
 
 export default function HomePage() {
   const router = useRouter();
@@ -24,7 +24,7 @@ export default function HomePage() {
   const handleDemoLogin = async () => {
     setIsLoading(true);
     setTimeout(() => {
-      toast.success("Demo login successful!");
+      displayToast("homePage.demoLoginSuccess", "success");
       router.push("/dashboard");
       setIsLoading(false);
     }, 1000);

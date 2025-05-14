@@ -6,6 +6,7 @@ import { transcriptionJobs, qualityEnum } from "@/server/db/schema"; // Import q
 import { revalidatePath } from "next/cache"; // To trigger re-fetching on the dashboard
 import { getAuthSession } from "@/lib/auth"; // Import the session utility
 import { addTranscriptionJob } from "@/lib/queue/transcription-queue";
+import { logger } from '../logger';
 
 // Input schema validation using Zod
 const SubmitJobSchema = z.object({
@@ -59,7 +60,7 @@ export async function submitJobAction(formData: FormData) {
   //    return { success: false, error: "Invalid user session." };
   // }
 
-  console.log(`Submit Job Action called by User ID: ${userId}`); // <<< Changed: Log the string ID
+  logger.info(`[JobAction] Submit Job Action called by User ID: ${userId}`); // <<< Changed: Log the string ID
 
   // --- 2. Validation ---
   const validatedFields = SubmitJobSchema.safeParse({
@@ -68,7 +69,7 @@ export async function submitJobAction(formData: FormData) {
   });
 
   if (!validatedFields.success) {
-    console.error("Validation Errors:", validatedFields.error.flatten().fieldErrors);
+    logger.error("[JobAction] Validation Errors:", validatedFields.error.flatten().fieldErrors);
     return {
       success: false,
       error: "Invalid input.",
@@ -81,7 +82,7 @@ export async function submitJobAction(formData: FormData) {
 
   try {
     // --- 3. Add to Queue (Gets jobId) ---
-    console.log(`Adding job for URL ${videoUrl} with quality ${quality} to queue...`);
+    logger.info(`[JobAction] Adding job for URL ${videoUrl} with quality ${quality} to queue...`);
     // Pass data matching Omit<TranscriptionJobData, 'jobId'>
     // Assuming apiKey is not needed for internal jobs & fallback is true
     // Pass userId as optional field
@@ -97,10 +98,10 @@ export async function submitJobAction(formData: FormData) {
         // Adjust priority: 'caption_first' jobs get 'standard' priority
         quality === 'caption_first' ? 'standard' : quality 
     ); 
-    console.log(`Job added to queue with ID: ${jobId}`);
+    logger.info(`[JobAction] Job added to queue with ID: ${jobId}`);
 
     // --- 4. Database Interaction (Uses jobId from queue) ---
-    console.log(`Creating preliminary job ${jobId} in DB...`);
+    logger.info(`[JobAction] Creating preliminary job ${jobId} in DB...`);
     await db.insert(transcriptionJobs).values({
       id: jobId, // Use jobId from queue function
       userId: userId, // <<< Changed: Link to authenticated user using the string ID
@@ -111,7 +112,7 @@ export async function submitJobAction(formData: FormData) {
       createdAt: new Date(), 
       updatedAt: new Date(),
     });
-    console.log(`Preliminary job ${jobId} created successfully in DB with status 'pending_credit_deduction'.`);
+    logger.info(`[JobAction] Preliminary job ${jobId} created successfully in DB with status 'pending_credit_deduction'.`);
 
     // --- 5. Trigger Revalidation (Optional but recommended) ---
     // Tells Next.js to refetch data for the dashboard path
@@ -126,7 +127,7 @@ export async function submitJobAction(formData: FormData) {
   } catch (error) {
     // Improved error logging
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error("Error submitting job:", errorMessage, error); 
+    logger.error("[JobAction] Error submitting job:", errorMessage, error); 
     // TODO: Implement more robust error handling/rollback if necessary
     return { success: false, error: `Failed to submit job: ${errorMessage}` };
   }

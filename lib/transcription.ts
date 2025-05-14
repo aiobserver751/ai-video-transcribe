@@ -5,86 +5,84 @@ import path from 'path';
 import fs from 'fs';
 
 const execAsync = promisify(exec);
-const statAsync = promisify(fs.stat);
+// const statAsync = promisify(fs.stat); // No longer needed as getFileSizeMB is removed
+// const mkdirAsync = promisify(fs.mkdir); // No longer needed as fs.mkdirSync is used
 
-// Defined but flagged as unused by linter previously.
-// Keeping it as fs.mkdirSync is used later, indicating intent.
-const mkdirAsync = promisify(fs.mkdir);
-
-const MAX_FILE_SIZE_MB = 25; // Example constant, ensure it's used if needed elsewhere or remove.
-
-async function getFileSizeMB(filePath: string): Promise<number> {
-  // Ensure statAsync is used if needed, otherwise remove if getFileSizeMB is unused.
-  // Currently getFileSizeMB is not called within this file after removing compressAudio/transcribeChunk.
-  // Consider removing getFileSizeMB and statAsync if truly unused now.
-  const stats = await statAsync(filePath);
-  return stats.size / (1024 * 1024);
-}
+// Removed getFileSizeMB as it was unused.
 
 /**
  * Transcribes audio using the local Whisper CLI.
- * Saves the output to a .txt file in the tmp directory.
- * Returns the full path to the generated .txt file.
+ * Saves the output to .txt, .srt, and .vtt files in the tmp directory.
+ * Returns an object with paths to the generated files.
  */
-export async function transcribeAudio(audioPath: string): Promise<string> {
+export async function transcribeAudio(audioPath: string): Promise<{ txtPath: string; srtPath: string; vttPath: string; }> {
   const totalStartTime = Date.now();
   const outputDir = path.join(process.cwd(), 'tmp');
-  // Determine the base output filename from the input audio path
   const inputBasename = path.basename(audioPath, path.extname(audioPath));
-  // Whisper CLI creates output based on input name + format extension
+  
   const outputTxtFilename = `${inputBasename}.txt`;
-  const outputPath = path.join(outputDir, outputTxtFilename);
+  const outputSrtFilename = `${inputBasename}.srt`;
+  const outputVttFilename = `${inputBasename}.vtt`;
+
+  const txtOutputPath = path.join(outputDir, outputTxtFilename);
+  const srtOutputPath = path.join(outputDir, outputSrtFilename);
+  const vttOutputPath = path.join(outputDir, outputVttFilename);
+
+  const filesToCleanOnError = [txtOutputPath, srtOutputPath, vttOutputPath];
 
   try {
-    logger.info(`Starting standard Whisper transcription for ${audioPath}`);
-    logger.info(`Output will be saved to: ${outputPath}`);
+    logger.info(`[Transcription] Starting standard Whisper transcription for ${audioPath}`);
+    logger.info(`[Transcription] Output directory: ${outputDir}. Expected files: ${outputTxtFilename}, ${outputSrtFilename}, ${outputVttFilename}`);
 
-    // Create output directory if it doesn't exist
     if (!fs.existsSync(outputDir)) {
-      // Using fs.mkdirSync as it was used before.
       fs.mkdirSync(outputDir, { recursive: true });
-      logger.info(`Created output directory: ${outputDir}`);
+      logger.info(`[Transcription] Created output directory: ${outputDir}`);
     }
 
-    // Construct the whisper command to only output txt
-    // Using --model base. Adjust model as needed (e.g., tiny, small, medium, large).
-    // Added --language English for consistency. Remove if language detection is desired.
-    const command = `whisper "${audioPath}" --model base --language English --output_dir "${outputDir}" --output_format txt`;
-    logger.info(`Executing Whisper command: ${command}`);
+    // Construct the whisper command to output txt, srt, and vtt
+    const command = `whisper "${audioPath}" --model base --language English --output_dir "${outputDir}" --output_format all`;
+    logger.info(`[Transcription] Executing Whisper command: ${command}`);
     await execAsync(command);
 
-    // Verify the output file was created
-    if (!fs.existsSync(outputPath)) {
-      logger.error(`Whisper command finished but output file not found: ${outputPath}`);
+    // Verify all output files were created
+    const allFilesCreated = fs.existsSync(txtOutputPath) && fs.existsSync(srtOutputPath) && fs.existsSync(vttOutputPath);
+
+    if (!allFilesCreated) {
+      logger.error(`[Transcription] Whisper command finished but one or more output files not found.`);
+      logger.debug(`[Transcription] TXT exists: ${fs.existsSync(txtOutputPath)} at ${txtOutputPath}`);
+      logger.debug(`[Transcription] SRT exists: ${fs.existsSync(srtOutputPath)} at ${srtOutputPath}`);
+      logger.debug(`[Transcription] VTT exists: ${fs.existsSync(vttOutputPath)} at ${vttOutputPath}`);
       // Attempt to list files in outputDir for debugging
       try {
         const files = fs.readdirSync(outputDir);
-        logger.debug(`Files in ${outputDir}: ${files.join(', ')}`);
-      } catch (readErr) {
-        logger.error(`Could not read directory ${outputDir}: ${readErr}`);
+        logger.debug(`[Transcription] Files in ${outputDir}: ${files.join(', ')}`);
+      } catch (readErr: unknown) {
+        logger.error(`[Transcription] Could not read directory ${outputDir}: ${readErr instanceof Error ? readErr.message : String(readErr)}`);
       }
-      throw new Error(`Whisper transcription failed to produce output file: ${outputTxtFilename}`);
+      throw new Error(`Whisper transcription failed to produce one or more output files.`);
     }
 
-    logger.info(`Transcription file created successfully: ${outputPath}`);
-    // Return the path to the created file
-    return outputPath;
+    logger.info(`[Transcription] Transcription files created successfully: TXT: ${txtOutputPath}, SRT: ${srtOutputPath}, VTT: ${vttOutputPath}`);
+    return {
+      txtPath: txtOutputPath,
+      srtPath: srtOutputPath,
+      vttPath: vttOutputPath,
+    };
 
   } catch (error) {
-    logger.error('Standard Whisper transcription error:', error);
-    // Attempt to clean up the potentially created (but maybe incomplete) output file if it exists on error
-    if (fs.existsSync(outputPath)) {
+    logger.error('[Transcription] Standard Whisper transcription error:', error);
+    for (const filePath of filesToCleanOnError) {
+      if (fs.existsSync(filePath)) {
       try {
-        logger.warn(`Cleaning up potentially incomplete file due to error: ${outputPath}`);
-        fs.unlinkSync(outputPath);
-      } catch (cleanupError) {
-        logger.warn(`Failed to clean up transcription file on error: ${cleanupError}`);
+          logger.warn(`[Transcription] Cleaning up potentially incomplete file due to error: ${filePath}`);
+          fs.unlinkSync(filePath);
+        } catch (cleanupError: unknown) {
+          logger.warn(`[Transcription] Failed to clean up file ${filePath} on error: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+        }
       }
     }
     throw error; // Re-throw the original error
   } finally {
-    logger.info(`
-=== Total Standard Whisper Processing Time ===`);
-    logger.info(`Total time: ${(Date.now() - totalStartTime) / 1000}s`);
+    logger.info(`[Transcription] Total time: ${(Date.now() - totalStartTime) / 1000}s`);
   }
 }

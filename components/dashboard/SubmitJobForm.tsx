@@ -26,6 +26,7 @@ import { useUserProfile } from "@/context/UserProfileContext";
 import {
   Alert, AlertDescription, AlertTitle
 } from "@/components/ui/alert";
+import { displayToast } from "@/lib/toastUtils";
 
 // Helper to check for YouTube URL (can be moved to a utils file if used elsewhere)
 const isActuallyYouTubeUrl = (url: string): boolean => {
@@ -113,12 +114,12 @@ const SubmitJobForm = () => {
     // Specific check for caption_first before submitting
     if (currentQuality === "caption_first") {
       if (!isActuallyYouTubeUrl(currentVideoUrl)) {
-        toast.error("For 'Caption First' quality, a valid YouTube URL is required.");
+        displayToast("submitJobForm.youtubeUrlRequiredForCaptionFirst", "error");
         setFieldErrors({ videoUrl: ["A YouTube URL is required for Caption First quality."] });
         return;
       }
       if (captionsAvailable === false && !isCheckingCaptions) { // Check if captions are known to be unavailable
-        toast.error("Cannot submit: Captions are not available for this video for 'Caption First' quality.");
+        displayToast("submitJobForm.captionsNotAvailableForCaptionFirst", "error");
         // fieldErrors for videoUrl might be set by captionCheckError already if it was a yt-dlp issue
         // If captionCheckError is already set, don't overwrite it with a generic one.
         if (!captionCheckError) {
@@ -127,7 +128,7 @@ const SubmitJobForm = () => {
         return;
       }
       if (isCheckingCaptions) {
-        toast.info("Please wait, still checking for caption availability.");
+        displayToast("submitJobForm.checkingCaptionAvailability", "info");
         return;
       }
     }
@@ -136,7 +137,7 @@ const SubmitJobForm = () => {
       const result = await submitJobAction(formData);
 
       if (result.success) {
-        toast.success(`Job ${result.jobId} submitted successfully!`);
+        displayToast("submitJobForm.jobSubmittedSuccess", "success", { jobId: result.jobId || "N/A" });
         setVideoUrl("");
         setQuality("standard");
         setFieldErrors({});
@@ -144,7 +145,35 @@ const SubmitJobForm = () => {
         setCaptionsAvailable(null);
         setEstimatedDuration(null);
       } else {
-        toast.error(result.error || "Failed to submit job.");
+        // For the general error, we might want to pass the server's error message as a parameter
+        // or have a more generic message in the JSON.
+        // For now, let's use a default message if result.error is not specific enough
+        // or consider adding a new key for this specific fallback.
+        // The current messages.frontend.json has "Failed to submit job." for jobSubmitFailed.
+        // We can enhance this by passing `result.error` to a new placeholder.
+        // Let's assume `jobSubmitFailed` can take a {details} param.
+        // If not, we might need a new key like "jobSubmitFailedWithDetails"
+        // Or, the displayToast can have a default message parameter.
+        
+        // Option 1: Use existing key and pass result.error as a parameter if the JSON supports it
+        // displayToast("submitJobForm.jobSubmitFailed", "error", { details: result.error || "Unknown reason" });
+
+        // Option 2: Use the default message from JSON if result.error is generic
+        // This requires messages.json to have "Failed to submit job." as the description for "submitJobForm.jobSubmitFailed"
+        // and we pass `result.error` as a default override IF the JSON key is not found or to supplement it.
+        // The current displayToast uses defaultMessages if path isn't found.
+        // For now, let's assume the "jobSubmitFailed" key is sufficient, and `result.error` is for logging or more detailed internal state.
+        // If `result.error` IS the user-facing message, then the JSON shouldn't be used for it, or should have a generic wrapper.
+
+        // Given the current JSON: "description": "Failed to submit job."
+        // If result.error contains a more specific user-friendly message, it should be used.
+        // Let's refine this: If result.error is present, it's likely the intended user message.
+        if (result.error) {
+            toast.error(result.error); // Keep direct use if the error string is from server and meant for display
+        } else {
+            displayToast("submitJobForm.jobSubmitFailed", "error");
+        }
+        
         if (result.fieldErrors) {
           setFieldErrors(result.fieldErrors);
           // If the error is for videoUrl, and it's a caption_first YouTube error from the server,

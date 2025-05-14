@@ -12,7 +12,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Download, ExternalLink, Clock, Loader2 } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ArrowLeft, Download, ExternalLink, Clock, Loader2, FileText } from "lucide-react";
 import { format } from "date-fns";
 import Image from 'next/image'; // Import next/image
 // import Link from "next/link"; // Removed unused import
@@ -64,9 +65,11 @@ function getSubtitleFormatFromUrl(fileUrl: string | null | undefined): string | 
 }
 
 // Type for the raw API response before date conversion
-type RawApiJobResponse = Omit<TranscriptionJob, 'createdAt' | 'updatedAt'> & {
+type RawApiJobResponse = Omit<TranscriptionJob, 'createdAt' | 'updatedAt' | 'srtFileText' | 'vttFileText'> & {
   createdAt: string;
   updatedAt: string;
+  srt_file_text?: string | null;
+  vtt_file_text?: string | null;
 };
 
 // Function to fetch a specific job
@@ -87,8 +90,12 @@ const fetchJobDetail = async (jobId: string): Promise<TranscriptionJob | null> =
       updatedAt: new Date(apiData.updatedAt),
       statusMessage: apiData.statusMessage ?? null,
       transcriptionText: apiData.transcriptionText ?? null,
+      srtFileText: apiData.srt_file_text ?? null,
+      vttFileText: apiData.vtt_file_text ?? null,
       userId: apiData.userId ?? null,
       transcriptionFileUrl: apiData.transcriptionFileUrl ?? null,
+      srtFileUrl: apiData.srtFileUrl ?? null,
+      vttFileUrl: apiData.vttFileUrl ?? null,
       video_length_minutes_actual: apiData.video_length_minutes_actual ?? null,
       credits_charged: apiData.credits_charged ?? null,
     };
@@ -122,16 +129,28 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
     queryKey: ["transcriptionJobDetail", jobId],
     queryFn: () => fetchJobDetail(jobId),
     enabled: !!jobId,
-    refetchInterval: 5000, // Static polling interval e.g., every 5 seconds
+    refetchInterval: (data) => {
+      // Stop polling if job is completed or failed
+      if (data?.status === "completed" || data?.status === "failed") {
+        return false;
+      }
+      return 5000; // Poll every 5 seconds otherwise
+    },
     refetchOnWindowFocus: true,
   });
+
+  useEffect(() => {
+    if (job) {
+      console.log("Job details:", job);
+    }
+  }, [job]);
 
   // Calculate subtitle format if applicable
   const subtitleFormat = job && job.quality === 'caption_first' 
     ? getSubtitleFormatFromUrl(job.transcriptionFileUrl) 
     : null;
 
-  const handleDownload = () => {
+  const handleDownloadTxt = () => {
     if (!job?.transcriptionText || !isClientForDownload) return;
     const blob = new Blob([job.transcriptionText], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -142,6 +161,44 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handleFormatDownload = async (fileType: 'SRT' | 'VTT' | 'TXT') => {
+    if (!isClientForDownload || !job) return;
+
+    let contentToDownload: string | null = null;
+    let defaultFilename = `transcription-${job.id}.${fileType.toLowerCase()}`;
+    const mimeType = "text/plain;charset=utf-8"; // All are text-based
+
+    if (fileType === 'TXT') {
+      contentToDownload = job.transcriptionText || null;
+      // Default filename is already good
+    } else if (fileType === 'SRT') {
+      contentToDownload = job.srtFileText || null;
+      if (job.srtFileUrl) defaultFilename = job.srtFileUrl.split('/').pop() || defaultFilename;
+      else if (job.id) defaultFilename = `transcription-${job.id}.srt`; // Fallback if URL is null
+    } else if (fileType === 'VTT') {
+      contentToDownload = job.vttFileText || null;
+      if (job.vttFileUrl) defaultFilename = job.vttFileUrl.split('/').pop() || defaultFilename;
+      else if (job.id) defaultFilename = `transcription-${job.id}.vtt`; // Fallback if URL is null
+    }
+
+    if (!contentToDownload) {
+      logger.warn(`[handleFormatDownload] No content found to download for ${fileType} on job ${job.id}`);
+      // Optionally, notify user that content is not available (e.g., toast)
+      // Buttons should ideally be disabled if content is known to be unavailable.
+      return;
+    }
+
+    const blob = new Blob([contentToDownload], { type: mimeType });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = defaultFilename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(downloadUrl);
   };
 
   if (isLoading) {
@@ -209,21 +266,41 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
-              {job.status === "completed" && job.transcriptionText ? (
-                <>
-                  <div>
-                    <h3 className="text-sm font-medium mb-2">Transcription Preview:</h3>
-                    <div className="bg-muted/50 dark:bg-muted/20 p-4 rounded-md h-64 overflow-y-auto whitespace-pre-wrap text-sm border">
-                      {job.transcriptionText}
-                    </div>
-                  </div>
-                  <div className="flex justify-end mt-4">
-                    <Button onClick={handleDownload} disabled={!isClientForDownload || !job.transcriptionText}>
-                      <Download className="mr-2 h-4 w-4" />
-                      Download Transcript
-                    </Button>
-                  </div>
-                </>
+              {job.status === "completed" ? (
+                <Tabs defaultValue="text" className="w-full">
+                  <TabsList className="grid w-full grid-cols-3">
+                    <TabsTrigger value="text">Plain Text</TabsTrigger>
+                    <TabsTrigger value="srt" disabled={!job.srtFileText && !job.srtFileUrl}>SRT</TabsTrigger>
+                    <TabsTrigger value="vtt" disabled={!job.vttFileText && !job.vttFileUrl}>VTT</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="text">
+                    {job.transcriptionText ? (
+                      <div className="bg-muted/50 dark:bg-muted/20 p-4 rounded-md h-64 overflow-y-auto whitespace-pre-wrap text-sm border mt-2">
+                        {job.transcriptionText}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground mt-2">Plain text not available.</p>
+                    )}
+                  </TabsContent>
+                  <TabsContent value="srt">
+                    {job.srtFileText ? (
+                      <div className="bg-muted/50 dark:bg-muted/20 p-4 rounded-md h-64 overflow-y-auto whitespace-pre-wrap text-sm border mt-2">
+                        {job.srtFileText}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground mt-2">SRT text content not available for preview. You can try downloading the file.</p>
+                    )}
+                  </TabsContent>
+                  <TabsContent value="vtt">
+                    {job.vttFileText ? (
+                      <div className="bg-muted/50 dark:bg-muted/20 p-4 rounded-md h-64 overflow-y-auto whitespace-pre-wrap text-sm border mt-2">
+                        {job.vttFileText}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground mt-2">VTT text content not available for preview. You can try downloading the file.</p>
+                    )}
+                  </TabsContent>
+                </Tabs>
               ) : job.status === "processing" ? (
                 <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                   <Loader2 className="h-10 w-10 animate-spin text-primary mb-4" />
@@ -245,6 +322,39 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
                 </div>
               )}
             </CardContent>
+            {job.status === "completed" && (
+              <CardFooter className="flex justify-end items-center mt-4 space-x-2 border-t pt-4">
+                {job.vttFileUrl || job.vttFileText ? ( // Enable if URL or text exists
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => handleFormatDownload('VTT')}
+                    disabled={!isClientForDownload || (!job.vttFileText && !job.vttFileUrl)} // More robust disable
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Download VTT
+                  </Button>
+                ): null}
+                {job.srtFileUrl || job.srtFileText ? ( // Enable if URL or text exists
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => handleFormatDownload('SRT')}
+                    disabled={!isClientForDownload || (!job.srtFileText && !job.srtFileUrl)} // More robust disable
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Download SRT
+                  </Button>
+                ): null}
+                <Button 
+                  onClick={() => handleFormatDownload('TXT')} 
+                  disabled={!isClientForDownload || !job.transcriptionText}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Download .txt
+                </Button>
+              </CardFooter>
+            )}
           </Card>
         </div>
 

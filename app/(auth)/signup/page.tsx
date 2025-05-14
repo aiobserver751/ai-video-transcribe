@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Loader2, Chrome } from 'lucide-react'; // Import icons from lucide-react
+import { displayToast } from "@/lib/toastUtils";
 
 // Submit button component
 function SubmitButton() {
@@ -38,7 +39,7 @@ export default function SignUpPage() {
                 // Redirect to sign-in page after successful registration
                 router.push('/signin'); 
             } else {
-                toast.error("Registration Failed", { description: state.message });
+                displayToast("signUpPage.registrationFailed", "error", { message: state.message });
             }
         }
     }, [state, router]);

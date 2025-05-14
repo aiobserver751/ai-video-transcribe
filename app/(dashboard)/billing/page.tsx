@@ -5,10 +5,10 @@ import { useUserProfile } from "@/context/UserProfileContext"; // Using context 
 import { createCheckoutSession, createBillingPortalSession } from "@/app/actions/billingActions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { toast } from "sonner";
 import { Loader2, CheckCircle, Crown, Zap } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { format } from 'date-fns';
+import { displayToast } from "@/lib/toastUtils";
 
 // Moved helper function here
 function capitalizeFirstLetter(string: string | null | undefined) {
@@ -52,12 +52,13 @@ export default function BillingPage() {
         // NOTE: We might need to simplify createCheckoutSession if it still has update logic
         const { url, error } = await createCheckoutSession(priceId); 
         if (error) {
-            toast.error("Checkout Error", { description: error });
+            // Server provides the error string for description
+            displayToast("billingPage.checkoutError", "error", { error });
         } else if (url) {
             window.location.href = url; // Redirect to Stripe
             return; // Keep loading active
         } else {
-             toast.error("Checkout Error", { description: "Could not retrieve checkout URL." });
+             displayToast("billingPage.checkoutUrlError", "error");
         }
          setIsLoadingAction(null); // Reset loading state only on error or no URL
     };
@@ -68,13 +69,13 @@ export default function BillingPage() {
         setIsLoadingAction(actionType); 
         const { url, error } = await createBillingPortalSession();
         if (error) {
-            toast.error("Billing Portal Error", { description: error });
+            displayToast("billingPage.billingPortalError", "error", { error });
         } else if (url) {
             window.location.href = url; // Redirect to Stripe
              // Keep loading active as we navigate away
              return; // Prevent resetting loading state immediately
         } else {
-            toast.error("Billing Portal Error", { description: "Could not retrieve portal URL." });
+            displayToast("billingPage.billingPortalUrlError", "error");
         }
         setIsLoadingAction(null); // Reset loading state only on error or no URL
     };
