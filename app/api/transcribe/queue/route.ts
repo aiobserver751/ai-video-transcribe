@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Note: We don't need userId from the body anymore, we use the one from the API key
-    const { url, quality, fallbackOnRateLimit = true, callback_url, response_format: requested_response_format } = await request.json();
+    const { url, quality, fallbackOnRateLimit = true, callback_url, response_format: requested_response_format, summary_type: requested_summary_type } = await request.json();
 
     if (!url) {
       return NextResponse.json(
@@ -139,6 +139,23 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             error: "Invalid response_format parameter. Must be one of: plain_text, url, verbose",
+            status_code: 400,
+            status_message: 'Bad Request'
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    // NEW: Validate and set summary_type, defaulting to none
+    let summary_type: 'none' | 'basic' | 'extended' = 'none';
+    if (requested_summary_type) {
+      if (['none', 'basic', 'extended'].includes(requested_summary_type)) {
+        summary_type = requested_summary_type as 'none' | 'basic' | 'extended';
+      } else {
+        return NextResponse.json(
+          {
+            error: "Invalid summary_type parameter. Must be one of: none, basic, extended",
             status_code: 400,
             status_message: 'Bad Request'
           },
@@ -206,11 +223,12 @@ export async function POST(request: NextRequest) {
         userId: authenticatedUserId,
         apiKey: apiKey, 
         callback_url,
-        response_format: response_format // Pass the validated or default response_format
+        response_format: response_format, // Pass the validated or default response_format
+        summary_type: summary_type // NEW: Pass the validated summary_type
       },
       jobPriority // Use the determined jobPriority
     );
-    logger.info(`Added transcription job to queue: ${jobId} for user: ${authenticatedUserId}, priority: ${jobPriority}`);
+    logger.info(`Added transcription job to queue: ${jobId} for user: ${authenticatedUserId}, priority: ${jobPriority}, summary: ${summary_type}`);
 
     // === 4. Insert Job Record in DB ===
     try {
@@ -220,8 +238,10 @@ export async function POST(request: NextRequest) {
         userId: authenticatedUserId, 
         videoUrl: url,
         quality: requestedQuality,
-        status: 'pending_credit_deduction',
+        status: 'pending_credit_deduction', // Initial status
         origin: 'EXTERNAL',
+        // summary_type will be stored by the worker if applicable, or could be stored here too.
+        // For now, let worker handle direct DB field updates for summary_type along with summary content.
         // transcriptionFileUrl will be updated later
       });
       logger.info(`Successfully inserted job record: ${jobId}`);
@@ -250,7 +270,8 @@ export async function POST(request: NextRequest) {
         status_code: "202",
         status_message: "accepted",
         job_id: jobId,
-        quality: requestedQuality
+        quality: requestedQuality,
+        summary_type: summary_type // NEW: Include summary_type in the response
       },
       { status: 202 }
     );
@@ -336,6 +357,8 @@ export async function GET(request: NextRequest) {
           vttFileUrl: jobStatus.result.vttFileUrl,
           srtFileText: jobStatus.result.srtFileText,
           vttFileText: jobStatus.result.vttFileText,
+          basic_summary: jobStatus.result.basicSummary,
+          extended_summary: jobStatus.result.extendedSummary,
           callback_status: jobStatus.result.callback_success ? 'success' : 'not_sent',
           callback_error: jobStatus.result.callback_error,
           status_code: 200,

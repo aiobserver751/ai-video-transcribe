@@ -20,6 +20,8 @@ import {
   performCreditTransaction,
   getCreditConfig,
 } from '../../server/services/creditService.ts';
+// NEW: Import OpenAI Service
+import { generateOpenAISummary, getOpenAIConfig } from '../../server/services/openaiService.ts';
 
 const execAsync = promisify(exec);
 
@@ -198,6 +200,7 @@ interface TranscriptionJobData {
   baseFileName?: string; // For naming output files consistently
   apiKey?: string; // Added for API-originated jobs
   response_format?: 'plain_text' | 'url' | 'verbose'; // Added for controlling callback response content
+  summary_type?: 'none' | 'basic' | 'extended'; // NEW: For summary generation
 }
 
 // Result type for transcription job
@@ -210,6 +213,9 @@ interface TranscriptionResult {
   vttFileUrl?: string; // URL to the VTT file
   srtFileText?: string; // Text content of the SRT file
   vttFileText?: string; // Text content of the VTT file
+  // NEW: Summary fields
+  basicSummary?: string;
+  extendedSummary?: string;
   error?: string;
   callback_success?: boolean;
   callback_error?: string;
@@ -235,6 +241,9 @@ interface CallbackData {
     transcription_text?: string | null; // Plain text content
     srt_text?: string | null;           // SRT text content
     vtt_text?: string | null;           // VTT text content
+    // NEW: Summary fields for callback
+    basic_summary?: string | null;
+    extended_summary?: string | null;
   };
   error?: string;
 }
@@ -388,8 +397,8 @@ export function startTranscriptionWorker(concurrency = 5) {
   const worker = new Worker<TranscriptionJobData, TranscriptionResult>(
     QUEUE_NAMES.TRANSCRIPTION,
     async (job) => {
-      const { url, quality, fallbackOnRateLimit, callback_url, jobId, userId, baseFileName } = job.data;
-      logger.info(`[${jobId}] Worker received job. Quality: ${quality}, URL: ${url}`);
+      const { url, quality, fallbackOnRateLimit, callback_url, jobId, userId, baseFileName, summary_type } = job.data;
+      logger.info(`[${jobId}] Worker received job. Quality: ${quality}, URL: ${url}, Summary: ${summary_type}`);
       
       const tmpDir = path.join(process.cwd(), 'tmp');
       const videoIdForFilename = url.split('v=')[1]?.split('&')[0] || url.split('youtu.be/')[1] || Date.now().toString();
@@ -399,6 +408,9 @@ export function startTranscriptionWorker(concurrency = 5) {
       let transcriptionText: string | null = null;
       let srtFileTextDb: string | null = null;
       let vttFileTextDb: string | null = null;
+      // NEW: Summary text variables
+      let basicSummaryTextDb: string | null = null;
+      let extendedSummaryTextDb: string | null = null;
 
       let audioPath: string | null = null;
       const filesToCleanUp: string[] = [];
@@ -817,6 +829,106 @@ export function startTranscriptionWorker(concurrency = 5) {
           }
         }
 
+        // Ensure transcriptionText is not null before proceeding to summary
+        if (!processingError && (!transcriptionText || transcriptionText.trim() === "")) {
+          processingError = 'Transcription result is empty or was not generated. Cannot generate summary.';
+          logger.error(`[${jobId}] ${processingError}`);
+          // No need to throw here if we want to record the transcription failure but not attempt summary
+          // However, the user requirement is: if summary fails, job fails. 
+          // If transcription fails, summary cannot happen, so job should fail.
+          // The existing logic already throws if transcriptionText is empty later, so this is a pre-check.
+        }
+
+        // NEW STAGE: Summary Generation
+        if (!processingError && summary_type && summary_type !== 'none' && transcriptionText && transcriptionText.trim() !== "") {
+          logger.info(`[${jobId}] Starting ${summary_type} summary generation.`);
+          await job.updateProgress({ percentage: 85, stage: 'generating_summary', message: `Generating ${summary_type} summary...` });
+
+          try {
+            const openAIConf = getOpenAIConfig(); // To access credit names from .env via a structured way if needed, or directly use process.env
+            const creditSystemConf = getCreditConfig(); // Already used for transcription credits
+
+            let summaryCreditCost = 0;
+            let summaryTransactionType: typeof creditTransactionTypeEnum.enumValues[number];
+
+            if (summary_type === 'basic') {
+              summaryCreditCost = creditSystemConf.CREDITS_BASIC_SUMMARY_FIXED; // Using value from getCreditConfig
+              summaryTransactionType = 'basic_summary';
+            } else { // extended
+              summaryCreditCost = creditSystemConf.CREDITS_EXTENDED_SUMMARY_FIXED; // Using value from getCreditConfig
+              summaryTransactionType = 'extended_summary';
+            }
+            
+            logger.info(`[${jobId}] Attempting to deduct ${summaryCreditCost} credits for ${summary_type} summary from user ${userId}.`);
+            const summaryCreditResult = await performCreditTransaction(
+              userId,
+              summaryCreditCost,
+              summaryTransactionType,
+              { jobId: jobId } // Add relevant metadata if needed
+            );
+
+            if (!summaryCreditResult.success) {
+              const summaryCreditError = summaryCreditResult.error || `Credit deduction failed for ${summary_type} summary.`;
+              logger.error(`[${jobId}] ${summaryCreditError}`);
+              processingError = summaryCreditError; // Critical error, job must fail
+              // Update DB immediately to reflect this specific failure reason
+              await db.update(transcriptionJobs).set({
+                status: 'failed_insufficient_credits', // Or a more generic 'failed' with specific message
+                statusMessage: `Summary generation failed: ${processingError}`,
+                updatedAt: new Date()
+              }).where(eq(transcriptionJobs.id, jobId));
+              throw new Error(processingError); // This will be caught by the main catch block
+            }
+            logger.info(`[${jobId}] Credits deducted successfully for ${summary_type} summary. New balance: ${summaryCreditResult.newBalance}.`);
+            
+            // Add to total credits charged for the job
+            if (creditsChargedForDB !== null) {
+                creditsChargedForDB += summaryCreditCost;
+            } else {
+                creditsChargedForDB = summaryCreditCost; // Should not happen if transcription credits were charged
+            }
+
+
+            const generatedSummary = await generateOpenAISummary(transcriptionText!, summary_type as 'basic' | 'extended');
+            
+            if (summary_type === 'basic') {
+              basicSummaryTextDb = generatedSummary;
+            } else {
+              extendedSummaryTextDb = generatedSummary;
+            }
+            logger.info(`[${jobId}] ${summary_type} summary generated successfully. Length: ${generatedSummary.length}`);
+            await job.updateProgress({ percentage: 90, stage: 'summary_completed', message: 'Summary generated.'});
+
+          } catch (summaryError: unknown) {
+            const summaryErrorMessage = summaryError instanceof Error ? summaryError.message : String(summaryError);
+            logger.error(`[${jobId}] Error during ${summary_type} summary generation stage: ${summaryErrorMessage}`);
+            processingError = `Summary generation failed: ${summaryErrorMessage}`;
+            // Job must fail if summary fails. This error will be caught by the main catch block.
+            // Update DB immediately for clarity on failure point
+             await db.update(transcriptionJobs).set({
+                status: 'failed',
+                statusMessage: processingError,
+                updatedAt: new Date()
+              }).where(eq(transcriptionJobs.id, jobId));
+            throw new Error(processingError);
+          }
+        } else if (summary_type && summary_type !== 'none' && (!transcriptionText || transcriptionText.trim() === "")) {
+            logger.warn(`[${jobId}] Summary (${summary_type}) requested, but transcription text is empty. Skipping summary generation.`);
+            // This scenario implies transcription failed to produce text, which should already be handled / lead to job failure.
+            // If somehow transcriptionText is empty but no processingError, we mark job as failed here too.
+            if (!processingError) {
+                processingError = "Transcription text was empty, summary could not be generated.";
+                logger.error(`[${jobId}] ${processingError}`);
+                 await db.update(transcriptionJobs).set({ // Ensure job is marked failed
+                    status: 'failed',
+                    statusMessage: processingError,
+                    updatedAt: new Date()
+                }).where(eq(transcriptionJobs.id, jobId));
+                throw new Error(processingError); // Go to main catch
+            }
+        }
+
+
         // STAGE 4: Finalize and Cleanup
         if (processingError) { throw new Error(processingError); }
         if (!transcriptionText || transcriptionText.trim() === "") { 
@@ -837,20 +949,24 @@ export function startTranscriptionWorker(concurrency = 5) {
           await db.update(transcriptionJobs).set({
             userId,
             quality: qualityUsed,
-            status: processingError ? 'failed' : 'completed',
-            statusMessage: processingError || null,
+            status: 'completed', // If we reach here, it's completed
+            statusMessage: null,  // Clear any previous non-critical messages
             transcriptionFileUrl: transcriptionFileUrlDb || null,
             srtFileUrl: srtFileUrlDb || null,
             vttFileUrl: vttFileUrlDb || null,
             transcriptionText: transcriptionText || null,
             srt_file_text: srtFileTextDb || null,
             vtt_file_text: vttFileTextDb || null,
+            // NEW: Add summary text to DB
+            basicSummary: basicSummaryTextDb || null,
+            extendedSummary: extendedSummaryTextDb || null,
             updatedAt: new Date(),
             video_length_minutes_actual: videoLengthMinutesActual,
-            credits_charged: creditsChargedForDB,
+            credits_charged: creditsChargedForDB, // This now includes summary credits if any
           }).where(eq(transcriptionJobs.id, jobId));
-        logger.info(`[${jobId}] Finished processing job. Status: ${processingError ? 'failed' : 'completed'}`);
+        logger.info(`[${jobId}] Finished processing job. Status: completed`);
         await job.updateProgress({ percentage: 100, stage: 'completed', message: 'Job processed successfully' });
+        
         const jobResult: TranscriptionResult = {
           transcription: transcriptionText!, 
           quality: qualityUsed,
@@ -860,6 +976,9 @@ export function startTranscriptionWorker(concurrency = 5) {
           vttFileUrl: vttFileUrlDb === null ? undefined : vttFileUrlDb,
           srtFileText: srtFileTextDb === null ? undefined : srtFileTextDb,
           vttFileText: vttFileTextDb === null ? undefined : vttFileTextDb,
+          // NEW: Add summary text to job result
+          basicSummary: basicSummaryTextDb === null ? undefined : basicSummaryTextDb,
+          extendedSummary: extendedSummaryTextDb === null ? undefined : extendedSummaryTextDb,
         };
         if (callback_url) {
           try {
@@ -874,6 +993,9 @@ export function startTranscriptionWorker(concurrency = 5) {
                 transcription_text: transcriptionText || null,
                 srt_text: srtFileTextDb || null,
                 vtt_text: vttFileTextDb || null,
+                // NEW: Add summaries to verbose callback
+                basic_summary: basicSummaryTextDb || null,
+                extended_summary: extendedSummaryTextDb || null,
               };
             } else if (jobResponseFormat === 'url') {
               callbackResponsePayload = {
@@ -886,6 +1008,9 @@ export function startTranscriptionWorker(concurrency = 5) {
                 transcription_text: transcriptionText || null,
                 srt_text: srtFileTextDb || null,
                 vtt_text: vttFileTextDb || null,
+                // NEW: Add summaries to plain_text callback
+                basic_summary: basicSummaryTextDb || null,
+                extended_summary: extendedSummaryTextDb || null,
               };
             }
 
@@ -918,26 +1043,30 @@ export function startTranscriptionWorker(concurrency = 5) {
         } else {
           errorMessage = 'An unknown error occurred during job processing.';
         }
+        // Ensure processingError variable reflects the caught error for DB update
+        processingError = errorMessage; 
         logger.error(`[${jobId}] Unhandled error in worker:`, error);
-        const finalProcessingError: string | null = errorMessage || null;
         try {
           await db.update(transcriptionJobs).set({
             status: 'failed',
-            statusMessage: finalProcessingError,
+            statusMessage: processingError, // Use the caught error message
             updatedAt: new Date(),
             transcriptionFileUrl: transcriptionFileUrlDb || null,
             srtFileUrl: srtFileUrlDb || null,
             vttFileUrl: vttFileUrlDb || null,
-            transcriptionText: transcriptionText || null,
+            transcriptionText: transcriptionText || null, // Log what we had, if anything
             srt_file_text: srtFileTextDb || null,
             vtt_file_text: vttFileTextDb || null,
+            // NEW: Log summary text even on failure, if generated before error
+            basicSummary: basicSummaryTextDb || null,
+            extendedSummary: extendedSummaryTextDb || null,
             video_length_minutes_actual: videoLengthMinutesActual,
             credits_charged: creditsChargedForDB,
           }).where(eq(transcriptionJobs.id, jobId));
         } catch (dbError) {
           logger.error(`[${jobId}] FATAL: Could not update job status to failed in DB after unhandled error:`, dbError);
         }
-        throw new Error(finalProcessingError ?? 'Job failed with an unspecified error');
+        throw new Error(processingError ?? 'Job failed with an unspecified error');
       } finally {
         // Only clean up files in production. In development, files remain in /tmp for inspection via file:/// URLs.
         if (isProduction && filesToCleanUp.length > 0) { 

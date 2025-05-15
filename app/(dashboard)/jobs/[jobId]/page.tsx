@@ -13,14 +13,20 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Download, ExternalLink, Clock, Loader2, FileText } from "lucide-react";
+import { ArrowLeft, Download, ExternalLink, Clock, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import Image from 'next/image'; // Import next/image
 // import Link from "next/link"; // Removed unused import
 import axios from "axios";
 import { logger } from "@/lib/logger";
 import { useQuery } from "@tanstack/react-query"; 
-import type { TranscriptionJob } from "@/lib/types"; // Using type import
+import type { TranscriptionJob as GlobalTranscriptionJobType } from "@/lib/types"; // Using type import
+
+// Extend the global type or define a local one that includes summaries
+interface TranscriptionJob extends GlobalTranscriptionJobType {
+  basicSummary?: string | null;
+  extendedSummary?: string | null;
+}
 
 interface JobDetailPageProps {
   params: {
@@ -65,11 +71,16 @@ function getSubtitleFormatFromUrl(fileUrl: string | null | undefined): string | 
 }
 
 // Type for the raw API response before date conversion
+// Ensure this matches the fields actually returned by your /api/jobs/[jobId] endpoint
 type RawApiJobResponse = Omit<TranscriptionJob, 'createdAt' | 'updatedAt' | 'srtFileText' | 'vttFileText'> & {
   createdAt: string;
   updatedAt: string;
-  srt_file_text?: string | null;
-  vtt_file_text?: string | null;
+  srt_file_text?: string | null; // Assuming API might still send these as snake_case
+  vtt_file_text?: string | null; // Assuming API might still send these as snake_case
+  // EXPECTING CAMEL CASE FROM API FOR SUMMARIES as Drizzle returns this by default
+  // and the /api/jobs/[jobId] route currently passes it through directly.
+  basicSummary?: string | null; 
+  extendedSummary?: string | null;
 };
 
 // Function to fetch a specific job
@@ -90,8 +101,11 @@ const fetchJobDetail = async (jobId: string): Promise<TranscriptionJob | null> =
       updatedAt: new Date(apiData.updatedAt),
       statusMessage: apiData.statusMessage ?? null,
       transcriptionText: apiData.transcriptionText ?? null,
-      srtFileText: apiData.srt_file_text ?? null,
-      vttFileText: apiData.vtt_file_text ?? null,
+      srtFileText: apiData.srt_file_text ?? null, // Keep mapping if these are indeed snake_case
+      vttFileText: apiData.vtt_file_text ?? null, // Keep mapping if these are indeed snake_case
+      // USE CAMEL CASE DIRECTLY as per RawApiJobResponse expectation
+      basicSummary: apiData.basicSummary ?? null,
+      extendedSummary: apiData.extendedSummary ?? null,
       userId: apiData.userId ?? null,
       transcriptionFileUrl: apiData.transcriptionFileUrl ?? null,
       srtFileUrl: apiData.srtFileUrl ?? null,
@@ -129,14 +143,13 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
     queryKey: ["transcriptionJobDetail", jobId],
     queryFn: () => fetchJobDetail(jobId),
     enabled: !!jobId,
-    refetchInterval: (data) => {
-      // Stop polling if job is completed or failed
-      if (data?.status === "completed" || data?.status === "failed") {
+    refetchInterval: (query) => {
+      const jobData = query.state.data;
+      if (jobData?.status === "completed" || jobData?.status === "failed") {
         return false;
       }
-      return 5000; // Poll every 5 seconds otherwise
+      return 5000;
     },
-    refetchOnWindowFocus: true,
   });
 
   useEffect(() => {
@@ -149,19 +162,6 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
   const subtitleFormat = job && job.quality === 'caption_first' 
     ? getSubtitleFormatFromUrl(job.transcriptionFileUrl) 
     : null;
-
-  const handleDownloadTxt = () => {
-    if (!job?.transcriptionText || !isClientForDownload) return;
-    const blob = new Blob([job.transcriptionText], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `transcription-${job.id}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
 
   const handleFormatDownload = async (fileType: 'SRT' | 'VTT' | 'TXT') => {
     if (!isClientForDownload || !job) return;
@@ -199,6 +199,23 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(downloadUrl);
+  };
+
+  // NEW: Handler for downloading summaries
+  const handleDownloadSummary = (summaryType: 'basic' | 'extended') => {
+    if (!job || !isClientForDownload) return;
+    const summaryText = summaryType === 'basic' ? job.basicSummary : job.extendedSummary;
+    if (!summaryText) return;
+
+    const blob = new Blob([summaryText], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${summaryType}_summary-${job.id}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   if (isLoading) {
@@ -434,6 +451,36 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
           </Card>
         </div>
       </div>
+
+      {/* Summary Display Card - NOW USING PRE-WRAP FOR RAW DISPLAY */}
+      {job.status === "completed" && (job.basicSummary || job.extendedSummary) && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>
+              {job.basicSummary ? "Basic Summary" : "Extended Summary"}
+            </CardTitle>
+            <CardDescription>
+              AI-generated summary of the transcription.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {/* Apply styling from the experimental raw text container */}
+            <div className="bg-muted/50 dark:bg-muted/20 p-4 rounded-md h-auto max-h-96 overflow-y-auto whitespace-pre-wrap text-sm border mt-2">
+              {job.basicSummary || job.extendedSummary || "Summary not available."}
+            </div>
+          </CardContent>
+          <CardFooter className="flex justify-end">
+            <Button 
+              onClick={() => handleDownloadSummary(job.basicSummary ? 'basic' : 'extended')} 
+              disabled={!isClientForDownload}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Download Summary
+            </Button>
+          </CardFooter>
+        </Card>
+      )}
+
     </div>
   );
 } 

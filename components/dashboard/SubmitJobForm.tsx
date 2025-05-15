@@ -47,8 +47,9 @@ const SubmitJobForm = () => {
   const { profile, isLoading: isLoadingProfile } = useUserProfile();
   const [videoUrl, setVideoUrl] = useState("");
   const [quality, setQuality] = useState<"caption_first" | "standard" | "premium">("standard");
+  const [summaryType, setSummaryType] = useState<"none" | "basic" | "extended">("none");
   const [isPending, startTransition] = useTransition();
-  const [fieldErrors, setFieldErrors] = useState<{ videoUrl?: string[]; quality?: string[] }>({});
+  const [fieldErrors, setFieldErrors] = useState<{ videoUrl?: string[]; quality?: string[]; summary_type?: string[] }>({});
 
   // State for caption check
   const [isCheckingCaptions, setIsCheckingCaptions] = useState(false);
@@ -60,13 +61,21 @@ const SubmitJobForm = () => {
 
   // Effect to check for captions when URL or quality changes
   useEffect(() => {
-    // Reset caption check state whenever URL or quality changes
+    // Reset other states like captionCheckError, captionsAvailable, etc.
+    // Don't clear fieldErrors.videoUrl here as it might come from the main submission attempt
     setCaptionCheckError(null);
     setCaptionsAvailable(null);
     setEstimatedDuration(null);
-    // Don't clear fieldErrors.videoUrl here as it might come from the main submission attempt
 
-    if (quality === "caption_first" && isActuallyYouTubeUrl(videoUrl)) {
+    // If quality is NOT 'caption_first', ensure checking is off and bail out early.
+    if (quality !== "caption_first") {
+      setIsCheckingCaptions(false);
+      return;
+    }
+
+    // If we reach here, quality IS "caption_first".
+    // Now, check if it's a YouTube URL.
+    if (isActuallyYouTubeUrl(videoUrl)) {
       setIsCheckingCaptions(true);
       checkYouTubeCaptionAvailability(videoUrl)
         .then((result) => {
@@ -98,7 +107,7 @@ const SubmitJobForm = () => {
           setIsCheckingCaptions(false);
         });
     } else {
-      // If not caption_first or not a YouTube URL, ensure checking is false
+      // Quality is "caption_first", but URL is not a valid YouTube URL (or empty)
       setIsCheckingCaptions(false);
     }
   }, [videoUrl, quality]);
@@ -110,6 +119,7 @@ const SubmitJobForm = () => {
 
     const currentVideoUrl = formData.get("videoUrl") as string;
     const currentQuality = formData.get("quality") as typeof quality;
+    const currentSummaryType = summaryType;
 
     // Specific check for caption_first before submitting
     if (currentQuality === "caption_first") {
@@ -134,12 +144,21 @@ const SubmitJobForm = () => {
     }
 
     startTransition(async () => {
-      const result = await submitJobAction(formData);
+      // Create a new FormData object to include summary_type from state if not directly in form elements
+      const augmentedFormData = new FormData();
+      augmentedFormData.append("videoUrl", currentVideoUrl);
+      augmentedFormData.append("quality", currentQuality);
+      augmentedFormData.append("summary_type", currentSummaryType); // Add summaryType to the form data
+      // Potentially copy other fields if your submitJobAction expects them and they are not covered by get("videoUrl") etc.
+      // For now, assuming submitJobAction is adapted or only needs these specific fields from augmentedFormData
+
+      const result = await submitJobAction(augmentedFormData); // Use augmentedFormData
 
       if (result.success) {
         displayToast("submitJobForm.jobSubmittedSuccess", "success", { jobId: result.jobId || "N/A" });
         setVideoUrl("");
         setQuality("standard");
+        setSummaryType("none"); // Reset summary type
         setFieldErrors({});
         setCaptionCheckError(null); // Clear caption check error on successful main submission
         setCaptionsAvailable(null);
@@ -275,11 +294,60 @@ const SubmitJobForm = () => {
                 </p>
               </div>
             </div>
+
+            {/* NEW: Summary Type Selection */}
+            {isPaidUser && (
+              <div className="space-y-2">
+                <label htmlFor="summary_type" className="text-sm font-medium">
+                  Summary Type (Optional)
+                </label>
+                <Select
+                  value={summaryType}
+                  onValueChange={(value: string) => {
+                    setSummaryType(value as "none" | "basic" | "extended");
+                    setFieldErrors(prev => ({ ...prev, summary_type: undefined })); 
+                  }}
+                  disabled={isPending || isLoadingProfile || isCheckingCaptions}
+                >
+                  <SelectTrigger id="summary_type">
+                    <SelectValue placeholder="Select summary type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="basic">Basic Summary (2 credits)</SelectItem>
+                    <SelectItem value="extended">Extended Summary (5 credits)</SelectItem>
+                  </SelectContent>
+                </Select>
+                {fieldErrors?.summary_type && <p className="text-xs text-red-500 mt-1">{fieldErrors.summary_type[0]}</p>}
+                 <p className="text-gray-500 text-xs mt-1">
+                  Generate a concise (basic) or detailed (extended) summary of the transcript.
+                </p>
+              </div>
+            )}
+            {!isPaidUser && (
+                <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-500">
+                        Summary Type
+                    </label>
+                    <Select disabled={true}>
+                        <SelectTrigger>
+                            <SelectValue placeholder="Upgrade for summaries" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="none">Summaries available on paid plans</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <p className="text-gray-500 text-xs mt-1">
+                        Upgrade to a Starter or Pro plan to enable automatic summary generation.
+                    </p>
+                </div>
+            )}
           </CardContent>
           <CardFooter className="flex justify-between">
             <Button type="button" variant="outline" onClick={() => { 
               setVideoUrl(""); 
               setQuality("standard"); 
+              setSummaryType("none"); // Reset summary type on cancel
               setFieldErrors({}); 
               setCaptionCheckError(null); 
               setCaptionsAvailable(null); 

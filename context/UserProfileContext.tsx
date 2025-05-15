@@ -68,6 +68,7 @@ export const UserProfileProvider: React.FC<UserProfileProviderProps> = ({ childr
         refetchInterval: 5000,
         staleTime: 3000,
         refetchOnWindowFocus: true,
+        placeholderData: (previousData) => previousData,
     });
 
     const value = {

@@ -141,6 +141,11 @@ export const transcriptionJobs = pgTable('transcription_jobs', {
   transcriptionText: text('transcription_text'),
   srt_file_text: text('srt_file_text'), // New field for SRT content
   vtt_file_text: text('vtt_file_text'), // New field for VTT content
+
+  // NEW: Summary Fields
+  basicSummary: text('basic_summary'),
+  extendedSummary: text('extended_summary'),
+
   createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   // NEW Fields for credit system

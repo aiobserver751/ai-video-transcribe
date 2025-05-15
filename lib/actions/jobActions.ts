@@ -8,10 +8,14 @@ import { getAuthSession } from "@/lib/auth"; // Import the session utility
 import { addTranscriptionJob } from "@/lib/queue/transcription-queue";
 import { logger } from '../logger';
 
+// Define an enum for summary types (can be moved to a shared location if needed)
+const summaryTypeEnum = z.enum(['none', 'basic', 'extended']);
+
 // Input schema validation using Zod
 const SubmitJobSchema = z.object({
   videoUrl: z.string().url({ message: "Please enter a valid URL." }),
   quality: z.enum(qualityEnum.enumValues),
+  summary_type: summaryTypeEnum.optional().default('none'), // NEW: Add summary_type
 }).superRefine((data, ctx) => {
   if (data.quality === 'caption_first') {
     try {
@@ -66,6 +70,7 @@ export async function submitJobAction(formData: FormData) {
   const validatedFields = SubmitJobSchema.safeParse({
     videoUrl: formData.get("videoUrl"),
     quality: formData.get("quality"),
+    summary_type: formData.get("summary_type"), // NEW: Get summary_type from formData
   });
 
   if (!validatedFields.success) {
@@ -77,12 +82,12 @@ export async function submitJobAction(formData: FormData) {
     };
   }
 
-  const { videoUrl, quality } = validatedFields.data;
+  const { videoUrl, quality, summary_type } = validatedFields.data;
   let jobId: string; // Declare jobId here
 
   try {
     // --- 3. Add to Queue (Gets jobId) ---
-    logger.info(`[JobAction] Adding job for URL ${videoUrl} with quality ${quality} to queue...`);
+    logger.info(`[JobAction] Adding job for URL ${videoUrl} with quality ${quality} and summary ${summary_type} to queue...`); // Updated log
     // Pass data matching Omit<TranscriptionJobData, 'jobId'>
     // Assuming apiKey is not needed for internal jobs & fallback is true
     // Pass userId as optional field
@@ -94,6 +99,7 @@ export async function submitJobAction(formData: FormData) {
             userId: userId, // <<< Changed: Pass original string ID
             apiKey: "", // No API key for internal job
             // callback_url: undefined // No callback for internal jobs
+            summary_type: summary_type, // NEW: Pass summary_type to queue
         }, 
         // Adjust priority: 'caption_first' jobs get 'standard' priority
         quality === 'caption_first' ? 'standard' : quality 
@@ -109,6 +115,7 @@ export async function submitJobAction(formData: FormData) {
       quality: quality,
       status: "pending_credit_deduction",
       origin: "INTERNAL", // Mark as internal origin
+      // summaryType: summary_type, // Worker will handle actual summary type and storage if needed
       createdAt: new Date(), 
       updatedAt: new Date(),
     });
