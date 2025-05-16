@@ -21,7 +21,9 @@ import {
   getCreditConfig,
 } from '../../server/services/creditService.ts';
 // NEW: Import OpenAI Service
-import { generateOpenAISummary, getOpenAIConfig } from '../../server/services/openaiService.ts';
+import { generateOpenAISummary } from '../../server/services/openaiService.ts';
+// --- URL Utils Import ---
+import { getVideoPlatform } from "@/lib/utils/urlUtils"; // REMOVED isYouTubeUrlUtil import
 
 const execAsync = promisify(exec);
 
@@ -61,131 +63,6 @@ function extractPlainText(content: string, format: 'srt' | 'vtt'): string {
       .trim();
   }
   return plainText;
-}
-
-// --- New Function to Fetch YouTube Subtitles (SRT, VTT, PlainText) ---
-async function fetchYouTubeSubtitles(
-  jobId: string,
-  url: string,
-  baseOutputName: string // e.g., /tmp/jobId_videoId
-): Promise<{
-  plainText: string | null;
-  srtFilePath: string | null;
-  vttFilePath: string | null;
-  rawSourceFilePath: string | null; // The file that was used as the source for plainText
-  rawSourceFormat: 'srt' | 'vtt' | null;
-  error?: string;
-}> {
-  logger.info(`[${jobId}:youtube_subs] Starting subtitle download for ${url}`);
-  const srtOutputName = `${baseOutputName}.en.srt`;
-  const vttOutputName = `${baseOutputName}.en.vtt`;
-  let downloadedSrtPath: string | null = null;
-  let downloadedVttPath: string | null = null;
-  let plainTextResult: string | null = null; // Renamed to avoid conflict with plainText in outer scope
-  let rawSourceFilePathResult: string | null = null;
-  let rawSourceFormatResult: 'srt' | 'vtt' | null = null;
-  let operationError: string | undefined;
-
-  // Ensure clean slate
-  for (const file of [srtOutputName, vttOutputName]) {
-    if (fs.existsSync(file)) {
-      try { await fs.promises.unlink(file); } catch { /* ignore unlink error */ }
-    }
-  }
-
-  // 1. Attempt to get/convert to SRT
-  const srtCmd = `yt-dlp --no-warnings --write-subs --write-auto-subs --sub-lang en --convert-subs srt --skip-download -o "${baseOutputName}.%(ext)s" "${url}"`;
-  logger.info(`[${jobId}:youtube_subs_srt] Executing: ${srtCmd}`);
-  try {
-    await execAsync(srtCmd);
-    if (fs.existsSync(srtOutputName)) {
-      const srtContent = await fs.promises.readFile(srtOutputName, "utf-8");
-      if (srtContent && srtContent.trim().length > 0) {
-        logger.info(`[${jobId}:youtube_subs_srt] SRT successfully downloaded/converted. Length: ${srtContent.length}`);
-        downloadedSrtPath = srtOutputName;
-        rawSourceFilePathResult = srtOutputName;
-        rawSourceFormatResult = 'srt';
-        plainTextResult = extractPlainText(srtContent, 'srt');
-      } else {
-        logger.warn(`[${jobId}:youtube_subs_srt] SRT file downloaded but was empty. Will attempt VTT next. Cleaning up: ${srtOutputName}`);
-        try { await fs.promises.unlink(srtOutputName); } catch { /* ignore unlink error of empty file */ }
-      }
-    } else {
-      logger.info(`[${jobId}:youtube_subs_srt] No SRT file found after command execution. Will attempt VTT next.`);
-    }
-  } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : String(error);
-    logger.warn(`[${jobId}:youtube_subs_srt] Error during SRT download/conversion attempt: ${msg}. Will attempt VTT next.`);
-    if (fs.existsSync(srtOutputName)) { try { await fs.promises.unlink(srtOutputName); } catch { /* ignore unlink error */ } }
-  }
-
-  // 2. Attempt to get native VTT
-  const vttCmd = `yt-dlp --no-warnings --write-subs --write-auto-subs --sub-lang en --sub-format vtt --skip-download -o "${baseOutputName}.%(ext)s" "${url}"`;
-  logger.info(`[${jobId}:youtube_subs_vtt] Executing: ${vttCmd}`);
-  try {
-    if (fs.existsSync(vttOutputName)) { try { await fs.promises.unlink(vttOutputName); } catch { /* ignore unlink error */ } } // Clean up before attempting VTT
-    await execAsync(vttCmd);
-    if (fs.existsSync(vttOutputName)) {
-      const vttContent = await fs.promises.readFile(vttOutputName, "utf-8");
-      if (vttContent && vttContent.trim().length > 0) {
-        logger.info(`[${jobId}:youtube_subs_vtt] VTT successfully downloaded. Length: ${vttContent.length}`);
-        downloadedVttPath = vttOutputName;
-        if (!plainTextResult) { // Only use VTT for plaintext if SRT didn't yield it
-          plainTextResult = extractPlainText(vttContent, 'vtt');
-          rawSourceFilePathResult = vttOutputName;
-          rawSourceFormatResult = 'vtt';
-        }
-      } else {
-        logger.warn(`[${jobId}:youtube_subs_vtt] VTT file downloaded but was empty. Cleaning up: ${vttOutputName}`);
-        try { await fs.promises.unlink(vttOutputName); } catch { /* ignore unlink error of empty file */ }
-      }
-    } else {
-      logger.info(`[${jobId}:youtube_subs_vtt] No VTT file found after command execution.`);
-    }
-  } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : String(error);
-    logger.warn(`[${jobId}:youtube_subs_vtt] Error during VTT download attempt: ${msg}.`);
-    if (fs.existsSync(vttOutputName)) { try { await fs.promises.unlink(vttOutputName); } catch { /* ignore unlink error */ } }
-    if (!downloadedSrtPath) operationError = `VTT download failed after SRT attempt also failed/yielded no content. Last error: ${msg}`;
-  }
-
-  if (!plainTextResult && (!downloadedSrtPath && !downloadedVttPath)) { // If no text AND no files, it's a full failure
-    operationError = operationError || "All attempts to fetch English subtitles (SRT, VTT) failed or yielded no content.";
-  } else if (!plainTextResult && (downloadedSrtPath || downloadedVttPath)) { // Files exist but text extraction failed (highly unlikely with current extractPlainText)
-    operationError = "Subtitle files were downloaded but plain text extraction failed.";
-  }
-
-
-  if (operationError) {
-    logger.error(`[${jobId}:youtube_subs] ${operationError}`);
-    return {
-      plainText: null, srtFilePath: downloadedSrtPath, vttFilePath: downloadedVttPath, // Return paths even if text extraction fails, for potential manual inspection
-      rawSourceFilePath: rawSourceFilePathResult, rawSourceFormat: rawSourceFormatResult, error: operationError
-    };
-  }
-  
-  logger.info(`[${jobId}:youtube_subs] Subtitle processing complete. SRT: ${downloadedSrtPath}, VTT: ${downloadedVttPath}, PlainText derived from: ${rawSourceFormatResult}`);
-  return {
-    plainText: plainTextResult,
-    srtFilePath: downloadedSrtPath,
-    vttFilePath: downloadedVttPath,
-    rawSourceFilePath: rawSourceFilePathResult,
-    rawSourceFormat: rawSourceFormatResult,
-  };
-}
-
-// Helper to check for YouTube URL
-function isYouTubeUrl(url: string): boolean {
-  try {
-    const parsedUrl = new URL(url);
-    const hostname = parsedUrl.hostname.toLowerCase();
-    return (
-      (hostname === "youtube.com" || hostname === "www.youtube.com") &&
-      parsedUrl.searchParams.has("v")
-    ) || (hostname === "youtu.be" && parsedUrl.pathname.length > 1);
-  } catch {
-    return false;
-  }
 }
 
 // Job data type for transcription job
@@ -398,10 +275,31 @@ export function startTranscriptionWorker(concurrency = 5) {
     QUEUE_NAMES.TRANSCRIPTION,
     async (job) => {
       const { url, quality, fallbackOnRateLimit, callback_url, jobId, userId, baseFileName, summary_type } = job.data;
-      logger.info(`[${jobId}] Worker received job. Quality: ${quality}, URL: ${url}, Summary: ${summary_type}`);
+      logger.info(`[${jobId}] Worker received job. URL: ${url}, Quality: ${quality}, Summary: ${summary_type}`);
       
+      const platform = getVideoPlatform(url);
+      logger.info(`[${jobId}] Detected platform: ${platform}`);
+
       const tmpDir = path.join(process.cwd(), 'tmp');
-      const videoIdForFilename = url.split('v=')[1]?.split('&')[0] || url.split('youtu.be/')[1] || Date.now().toString();
+      // const videoIdForFilename = url.split('v=')[1]?.split('&')[0] || url.split('youtu.be/')[1] || Date.now().toString(); // OLD
+      
+      // Generate a unique part for filenames, fallback to timestamp if no common video ID pattern matches
+      let videoIdForFilenameSuffix = Date.now().toString();
+      if (platform === 'youtube') {
+        videoIdForFilenameSuffix = url.split('v=')[1]?.split('&')[0] || url.split('youtu.be/')[1] || videoIdForFilenameSuffix;
+      } else if (platform === 'tiktok') {
+        try {
+            const tiktokPathParts = new URL(url).pathname.split('/').filter(p => p);
+            videoIdForFilenameSuffix = tiktokPathParts[tiktokPathParts.length -1] || videoIdForFilenameSuffix;
+        } catch { logger.warn(`[${jobId}] Could not parse TikTok URL for filename suffix: ${url}`); } // CHANGED catch(e) to catch
+      } else if (platform === 'instagram') {
+        try {
+            const instaPathParts = new URL(url).pathname.split('/').filter(p => p);
+            if (instaPathParts.length >= 2 && instaPathParts[instaPathParts.length-2] === 'reel') {
+                videoIdForFilenameSuffix = instaPathParts[instaPathParts.length-1] || videoIdForFilenameSuffix;
+            }
+        } catch { logger.warn(`[${jobId}] Could not parse Instagram URL for filename suffix: ${url}`); } // CHANGED catch(e) to catch
+      }
 
       let qualityUsed = quality;
       let processingError: string | null = null;
@@ -422,113 +320,139 @@ export function startTranscriptionWorker(concurrency = 5) {
       
       let videoLengthMinutesActual: number | null = null;
       let creditsChargedForDB: number | null = null;
-      let actualCost = 0;
       let creditDeductionError: string | null = null;
 
       const isProduction = process.env.NODE_ENV === 'production';
-      const effectiveBaseFileName = baseFileName || jobId; // Use baseFileName or fallback to jobId
+      const effectiveBaseFileName = baseFileName || jobId;
 
-      // Placeholder for S3 upload logic - assume it's defined elsewhere
       async function uploadToS3(filePath: string, s3Key: string): Promise<string> {
         logger.info(`[${jobId}] Placeholder: Uploading ${filePath} to S3 as ${s3Key}`);
-        // In a real scenario, this would involve AWS SDK to upload the file
-        // and return the S3 URL (e.g., `https://your-bucket.s3.amazonaws.com/${s3Key}`)
-        return `s3://placeholder-bucket/${s3Key}`; // Return a placeholder S3 URL
+        return `s3://placeholder-bucket/${s3Key}`;
+      }
+
+      // Helper to clean up specified files if they exist
+      async function cleanupFiles(files: string[]) {
+        for (const file of files) {
+          if (file && fs.existsSync(file)) {
+            try {
+              await fs.promises.unlink(file);
+              logger.info(`[${jobId}] Cleaned up temp file: ${file}`);
+            } catch (e) {
+              logger.warn(`[${jobId}] Error cleaning up temp file ${file}: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+        }
       }
 
       try {
-        // STAGE 1: Get Video Metadata / Duration
-        logger.info(`[${jobId}] Fetching video metadata/duration for URL: ${url}`);
+        // STAGE 0: Initial Platform Validation for caption_first
+        if (quality === 'caption_first' && platform !== 'youtube') {
+          processingError = `Job ${jobId}: 'caption_first' quality is exclusively for YouTube videos. Platform detected: ${platform}.`;
+          logger.error(processingError);
+          await db.update(transcriptionJobs).set({ status: 'failed', statusMessage: processingError, updatedAt: new Date() }).where(eq(transcriptionJobs.id, jobId));
+          throw new Error(processingError); // Go to main catch block
+        }
+
+        // STAGE 1: Get Initial Video Metadata / Duration (Best Effort)
+        logger.info(`[${jobId}] Fetching initial video metadata/duration for URL: ${url}`);
         await job.updateProgress({ percentage: 5, stage: 'metadata', message: 'Fetching video information' });
         
-        const isYouTube = isYouTubeUrl(url);
+        // const isYouTube = platform === 'youtube'; // platform variable is already available
 
-        if (quality === 'caption_first' && isYouTube) {
+        if (quality === 'caption_first') { // platform is already confirmed to be 'youtube' due to STAGE 0
           try {
-            // For YouTube caption-first, get duration string only
             const durationOutput = await execAsync(`yt-dlp --no-warnings --print duration_string --skip-download "${url}"`);
             const durationString = durationOutput.stdout.trim();
             if (durationString && durationString !== "NA") {
               const parts = durationString.split(':').map(Number);
               let durationInSeconds = 0;
-              if (parts.length === 3) { // HH:MM:SS
-                durationInSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
-              } else if (parts.length === 2) { // MM:SS
-                durationInSeconds = parts[0] * 60 + parts[1];
-              } else if (parts.length === 1) { // SS
-                durationInSeconds = parts[0];
-              }
+              if (parts.length === 3) { durationInSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2]; }
+              else if (parts.length === 2) { durationInSeconds = parts[0] * 60 + parts[1]; }
+              else if (parts.length === 1) { durationInSeconds = parts[0]; }
               if (durationInSeconds > 0) {
                 videoLengthMinutesActual = Math.max(1, Math.ceil(durationInSeconds / 60));
-                logger.info(`[${jobId}] YouTube video (caption-first) length: ${videoLengthMinutesActual} minutes.`);
-              } else {
-                logger.warn(`[${jobId}] Invalid duration string (${durationString}) for YouTube (caption-first).`);
+                logger.info(`[${jobId}] YouTube (caption-first) initial length: ${videoLengthMinutesActual} min.`);
+              } else { logger.warn(`[${jobId}] Invalid duration string (${durationString}) for YouTube (caption-first).`); }
+            } else { logger.warn(`[${jobId}] Could not extract duration string for YouTube (caption-first), was: '${durationString}'.`);}
+          } catch (durationError: unknown) {
+            const msg = durationError instanceof Error ? durationError.message : String(durationError);
+            logger.warn(`[${jobId}] Failed to get initial duration for YouTube (caption-first): ${msg}. Fixed cost applies anyway.`);
+          }
+        } else if (quality === 'standard' || quality === 'premium') {
+          // Attempt to get duration from metadata, but don't fail if not found.
+          try {
+            const metadataOutput = await execAsync(`yt-dlp -j --no-warnings "${url}"`); // No --skip-download needed as -j implies it.
+            const metadata = JSON.parse(metadataOutput.stdout);
+            if (metadata && metadata.duration) {
+              const durationInSeconds = Number(metadata.duration);
+              if (!isNaN(durationInSeconds) && durationInSeconds > 0) {
+                videoLengthMinutesActual = Math.max(1, Math.ceil(durationInSeconds / 60));
+                logger.info(`[${jobId}] Initial video length from metadata: ${videoLengthMinutesActual} minutes (Platform: ${platform}).`);
+              } else { 
+                logger.warn(`[${jobId}] Invalid duration (${metadata.duration}) from metadata (Platform: ${platform}). Will rely on ffprobe after download.`); 
               }
             } else {
-              logger.warn(`[${jobId}] Could not extract duration string for YouTube (caption-first), was: '${durationString}'. Proceeding without it.`);
+              logger.warn(`[${jobId}] Could not extract duration from 'yt-dlp -j' metadata for URL: ${url} (Platform: ${platform}). Will rely on ffprobe after download.`);
             }
-          } catch (durationError: unknown) {
-            const durationErrorMessage = durationError instanceof Error ? durationError.message : String(durationError);
-            logger.warn(`[${jobId}] Failed to get duration string for YouTube (caption-first): ${durationErrorMessage}. Proceeding without it.`);
-          }
-        } else {
-          // Existing metadata fetch for non-caption-first-YouTube jobs (standard, premium, or non-youtube caption_first if they somehow get here)
-        try {
-          const metadataOutput = await execAsync(`yt-dlp -j --no-warnings "${url}"`);
-          const metadata = JSON.parse(metadataOutput.stdout);
-          if (metadata && metadata.duration) {
-            const durationInSeconds = Number(metadata.duration);
-            if (!isNaN(durationInSeconds) && durationInSeconds > 0) {
-              videoLengthMinutesActual = Math.max(1, Math.ceil(durationInSeconds / 60));
-              logger.info(`[${jobId}] Video length: ${videoLengthMinutesActual} minutes.`);
-            } else {
-               logger.warn(`[${jobId}] Invalid duration (${metadata.duration}) extracted.`);
-            }
-          } else {
-            logger.warn(`[${jobId}] Could not extract duration for URL: ${url}.`);
-          }
-        } catch (metaError: unknown) {
-          const metaErrorMessage = metaError instanceof Error ? metaError.message : String(metaError);
-          logger.error(`[${jobId}] Failed to get video metadata: ${metaErrorMessage}`);
-            // If quality is not 'caption_first', this is a critical error for credit calculation.
-            // If it IS 'caption_first' but NOT YouTube (e.g. direct mp4 with caption_first, which is not intended),
-            // it would also be an issue. The upstream validation should prevent non-YouTube caption_first.
-            if (!(quality === 'caption_first' && isYouTube)) { // Fail if not (YouTube + caption_first path which handles missing duration)
-            await db.update(transcriptionJobs).set({ status: 'failed', statusMessage: `Failed to retrieve video metadata: ${metaErrorMessage}`, updatedAt: new Date() }).where(eq(transcriptionJobs.id, jobId));
-            throw new Error(`Failed to retrieve video metadata for ${jobId}: ${metaErrorMessage}`);
-          }
-            logger.warn(`[${jobId}] Proceeding for YouTube caption_first despite metadata error (already handled duration separately).`);
+          } catch (metaError: unknown) {
+            const msg = metaError instanceof Error ? metaError.message : String(metaError);
+            logger.warn(`[${jobId}] Failed to get video metadata via 'yt-dlp -j' (Platform: ${platform}): ${msg}. Will rely on ffprobe after download.`);
           }
         }
         
-        // Update DB with video length if found (applies to all paths that find it)
-        if (videoLengthMinutesActual !== null) {
+        // Update DB with initial video length if found for caption_first, or if found for standard/premium.
+        // For standard/premium, if videoLengthMinutesActual is still null here, it means initial metadata fetch failed,
+        // and it will be updated post-ffprobe.
+        if (videoLengthMinutesActual !== null) { // If we have a duration from any source
             await db.update(transcriptionJobs)
               .set({ video_length_minutes_actual: videoLengthMinutesActual, updatedAt: new Date() })
               .where(eq(transcriptionJobs.id, jobId));
-        } else {
-            // If still null (e.g. YT caption-first duration failed), store 0 or keep null. Let's use 0 for "N/A"
+            logger.info(`[${jobId}] DB updated with initial video_length_minutes_actual: ${videoLengthMinutesActual}`);
+        } else if (quality === 'caption_first') { // Only set to 0 if caption_first AND duration was NOT found
              await db.update(transcriptionJobs)
-              .set({ video_length_minutes_actual: 0, updatedAt: new Date() }) // Indicate 'Not Available' or failed fetch
+              .set({ video_length_minutes_actual: 0, updatedAt: new Date() }) 
               .where(eq(transcriptionJobs.id, jobId));
-            logger.info(`[${jobId}] Video length set to 0 (N/A) in DB.`);
+            logger.info(`[${jobId}] YouTube (caption-first) video length set to 0 (N/A) in DB as initial fetch failed.`);
         }
+        // If standard/premium and videoLengthMinutesActual is null, DB is not updated with duration yet.
 
+        // STAGE 2: Credit Calculation & Deduction (Logic moved for standard/premium)
+        if (quality === 'caption_first') { // Must be YouTube (platform check in STAGE 0)
+          logger.info(`[${jobId}] STAGE 2: Calculating credit cost for YouTube caption_first.`);
+          await job.updateProgress({ percentage: 10, stage: 'credit_check', message: 'Verifying account credits (caption_first)' });
+          
+          const creditSystemConfig = getCreditConfig(); // DECLARED HERE
+          const actualCost = creditSystemConfig.CREDITS_CAPTION_FIRST_FIXED; // DECLARED HERE
+          const transactionType: typeof creditTransactionTypeEnum.enumValues[number] = 'caption_download'; // DECLARED HERE
+          
+          creditsChargedForDB = actualCost;
 
-        // STAGE 2: Credit Calculation & Deduction
-        logger.info(`[${jobId}] Calculating credit cost for quality: ${quality}`);
-        await job.updateProgress({ percentage: 10, stage: 'credit_check', message: 'Verifying account credits' });
-        
-        let transactionType: typeof creditTransactionTypeEnum.enumValues[number];
-        const creditSystemConfig = getCreditConfig();
+          logger.info(`[${jobId}] Attempting to deduct ${actualCost} credits from user ${userId} for ${transactionType}.`);
+          const creditResult = await performCreditTransaction(
+            userId,
+            actualCost,
+            transactionType,
+            { jobId: jobId, videoLengthMinutesCharged: videoLengthMinutesActual ?? 0 } // videoLength for caption_first is indicative
+          );
 
-        if (quality === 'caption_first') {
-          if (!isYouTube) {
-            logger.warn(`[${jobId}] Processing 'caption_first' for a non-YouTube URL: ${url}. This is not the intended path.`);
+          if (!creditResult.success) {
+            creditDeductionError = creditResult.error || "Credit deduction failed for caption_first";
+            processingError = creditDeductionError;
+            logger.error(`[${jobId}] Credit deduction failed: ${processingError}`);
+            await db.update(transcriptionJobs)
+              .set({ status: 'failed_insufficient_credits', statusMessage: processingError, credits_charged: creditsChargedForDB, updatedAt: new Date() })
+              .where(eq(transcriptionJobs.id, jobId));
+            throw new Error(processingError);
           }
-          transactionType = 'caption_download';
-          actualCost = creditSystemConfig.CREDITS_CAPTION_FIRST_FIXED;
-        } else if (quality === 'standard') {
+          logger.info(`[${jobId}] Credits deducted successfully for caption_first. New balance: ${creditResult.newBalance}`);
+          await db.update(transcriptionJobs)
+            .set({ status: 'processing', credits_charged: actualCost, updatedAt: new Date(), statusMessage: "Credits deducted (caption_first)." })
+            .where(eq(transcriptionJobs.id, jobId));
+        }
+        // Credit deduction for standard/premium is now AFTER audio download and ffprobe.
+        // Commenting out the old, misplaced credit deduction logic for standard/premium below:
+        /*
+        else if (quality === 'standard') {
           if (videoLengthMinutesActual === null) { // Should have been caught by metadata stage if not YT caption_first
             processingError = 'Video duration unknown for standard quality, cannot calculate cost.';
             throw new Error(processingError);
@@ -583,91 +507,134 @@ export function startTranscriptionWorker(concurrency = 5) {
             statusMessage: "Credit deduction successful. Starting main task." 
           })
           .where(eq(transcriptionJobs.id, jobId));
+        */
 
-
-        // STAGE 3: Actual Work
-        const timestamp = Date.now();
-
-        if (qualityUsed === 'caption_first' && isYouTubeUrl(url)) {
+        // STAGE 3: Actual Work (Download, Transcribe)
+        if (qualityUsed === 'caption_first' && platform === 'youtube') {
           await job.updateProgress({ percentage: 20, stage: 'fetching_subtitles', message: 'Downloading YouTube subtitles.' });
-          const captionFileBaseName = path.join(tmpDir, `${jobId}_${videoIdForFilename}_caption`);
-          const subResult = await fetchYouTubeSubtitles(jobId, url, captionFileBaseName);
           
-          if (subResult.error || !subResult.plainText) {
-            processingError = subResult.error || 'Failed to fetch/process subtitles, or no plain text extracted.';
+          const captionFileBase = path.join(tmpDir, `${jobId}_${videoIdForFilenameSuffix}_caption`);
+          const srtOutputName = `${captionFileBase}.en.srt`;
+          const vttOutputName = `${captionFileBase}.en.vtt`;
+          
+          let downloadedSrtPath: string | null = null;
+          let downloadedVttPath: string | null = null;
+          let plainTextFromSubs: string | null = null;
+
+          // Ensure clean slate for subtitle files
+          await cleanupFiles([srtOutputName, vttOutputName]);
+
+          // 1. Attempt to get/convert to SRT
+          const srtCmd = `yt-dlp --no-warnings --write-subs --write-auto-subs --sub-lang en --convert-subs srt --skip-download -o "${captionFileBase}.%(ext)s" "${url}"`;
+          logger.info(`[${jobId}:youtube_subs_srt] Executing: ${srtCmd}`);
+          try {
+            await execAsync(srtCmd);
+            if (fs.existsSync(srtOutputName)) {
+              const srtContent = await fs.promises.readFile(srtOutputName, "utf-8");
+              if (srtContent && srtContent.trim().length > 0) {
+                logger.info(`[${jobId}:youtube_subs_srt] SRT successfully downloaded/converted. Length: ${srtContent.length}`);
+                downloadedSrtPath = srtOutputName;
+                filesToCleanUp.push(downloadedSrtPath);
+                srtFileTextDb = srtContent;
+                plainTextFromSubs = extractPlainText(srtContent, 'srt');
+                const srtFileName = path.basename(downloadedSrtPath);
+                srtFileUrlDb = isProduction
+                  ? await uploadToS3(downloadedSrtPath, `transcriptions/${jobId}/${srtFileName}`)
+                  : `file://${downloadedSrtPath}`;
+                logger.info(`[${jobId}] Caption-first: SRT file will be at ${srtFileUrlDb}`);
+              } else {
+                logger.warn(`[${jobId}:youtube_subs_srt] SRT file downloaded but was empty. Will attempt VTT next. Cleaning up: ${srtOutputName}`);
+                await cleanupFiles([srtOutputName]); // Clean up empty SRT
+              }
+            } else {
+              logger.info(`[${jobId}:youtube_subs_srt] No SRT file found after command execution. Will attempt VTT next.`);
+            }
+          } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.warn(`[${jobId}:youtube_subs_srt] Error during SRT download/conversion attempt: ${msg}. Will attempt VTT next.`);
+            await cleanupFiles([srtOutputName]);
+          }
+
+          // 2. Attempt to get native VTT
+          const vttCmd = `yt-dlp --no-warnings --write-subs --write-auto-subs --sub-lang en --sub-format vtt --skip-download -o "${captionFileBase}.%(ext)s" "${url}"`;
+          logger.info(`[${jobId}:youtube_subs_vtt] Executing: ${vttCmd}`);
+          try {
+            // Ensure VTT output path is clean before this attempt, in case a previous run left it.
+            await cleanupFiles([vttOutputName]); 
+            await execAsync(vttCmd);
+            if (fs.existsSync(vttOutputName)) {
+              const vttContent = await fs.promises.readFile(vttOutputName, "utf-8");
+              if (vttContent && vttContent.trim().length > 0) {
+                logger.info(`[${jobId}:youtube_subs_vtt] VTT successfully downloaded. Length: ${vttContent.length}`);
+                downloadedVttPath = vttOutputName;
+                filesToCleanUp.push(downloadedVttPath);
+                vttFileTextDb = vttContent;
+                const vttFileName = path.basename(downloadedVttPath);
+                vttFileUrlDb = isProduction
+                  ? await uploadToS3(downloadedVttPath, `transcriptions/${jobId}/${vttFileName}`)
+                  : `file://${downloadedVttPath}`;
+                logger.info(`[${jobId}] Caption-first: VTT file will be at ${vttFileUrlDb}`);
+                if (!plainTextFromSubs) { // Only use VTT for plaintext if SRT didn't yield it
+                  plainTextFromSubs = extractPlainText(vttContent, 'vtt');
+                }
+              } else {
+                logger.warn(`[${jobId}:youtube_subs_vtt] VTT file downloaded but was empty. Cleaning up: ${vttOutputName}`);
+                await cleanupFiles([vttOutputName]); // Clean up empty VTT
+              }
+            } else {
+              logger.info(`[${jobId}:youtube_subs_vtt] No VTT file found after command execution.`);
+            }
+          } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            logger.warn(`[${jobId}:youtube_subs_vtt] Error during VTT download attempt: ${msg}.`);
+            await cleanupFiles([vttOutputName]);
+            if (!downloadedSrtPath) processingError = `VTT download failed after SRT attempt also failed/yielded no content. Last error: ${msg}`;
+          }
+
+          if (!plainTextFromSubs && (!downloadedSrtPath && !downloadedVttPath)) {
+            processingError = processingError || "All attempts to fetch English subtitles (SRT, VTT) failed or yielded no content.";
+          } else if (!plainTextFromSubs && (downloadedSrtPath || downloadedVttPath)) {
+            processingError = "Subtitle files were downloaded but plain text extraction failed (or both were empty).";
+          }
+
+          if (processingError) {
             logger.error(`[${jobId}] Caption/Subtitle Error: ${processingError}`);
-            if (subResult.srtFilePath && fs.existsSync(subResult.srtFilePath)) filesToCleanUp.push(subResult.srtFilePath);
-            if (subResult.vttFilePath && fs.existsSync(subResult.vttFilePath)) filesToCleanUp.push(subResult.vttFilePath);
             throw new Error(processingError);
           }
           
-          transcriptionText = subResult.plainText;
+          transcriptionText = plainTextFromSubs; // Assign to the main transcriptionText variable
           logger.info(`[${jobId}] Plain text extracted from YouTube subtitles. Length: ${transcriptionText?.length}.`);
 
-          // Save the extracted plain text to a .txt file
+          // Save the extracted plain text to a .txt file (this part was mostly fine)
           if (transcriptionText) {
-            const {filePath: txtFilePath, fileNameWithExt: txtFileName} = await saveContentToFile(
-              transcriptionText,
-              effectiveBaseFileName, // Use the same base name as other quality types
-              jobId,
-              'txt'
-            );
-            filesToCleanUp.push(txtFilePath); // Add to cleanup
+            const txtFileBase = path.join(tmpDir, `${effectiveBaseFileName}_${jobId}`);
+            const txtFilePath = `${txtFileBase}.txt`;
+            await fs.promises.writeFile(txtFilePath, transcriptionText, 'utf-8');
+            filesToCleanUp.push(txtFilePath); 
+            const txtFileName = path.basename(txtFilePath);
             transcriptionFileUrlDb = isProduction
-              ? await uploadToS3(txtFilePath, `transcriptions/${jobId}/${txtFileName}`) // Placeholder for S3
-              : `file://${txtFilePath}`; // Use absolute path for local
+              ? await uploadToS3(txtFilePath, `transcriptions/${jobId}/${txtFileName}`)
+              : `file://${txtFilePath}`;
             finalFileUrl = transcriptionFileUrlDb;
             logger.info(`[${jobId}] Caption-first plain text saved to ${txtFilePath}. URL: ${transcriptionFileUrlDb}`);
           } else {
-            // This case should ideally be caught by the error check above, 
-            // but if not, transcriptionFileUrlDb will remain null.
-            logger.warn(`[${jobId}] transcriptionText was null or empty for caption_first, .txt file not saved.`);
+            logger.warn(`[${jobId}] transcriptionText was null or empty for caption_first after subtitle processing, .txt file not saved.`);
+            // This might be an error condition if no plain text could be derived.
+            if (!processingError) processingError = "No plain text could be derived from subtitles.";
+            throw new Error(processingError || "Failed to derive plain text from subtitles.");
           }
-
-          // Keep SRT and VTT URLs if available
-          if (subResult.srtFilePath) {
-            filesToCleanUp.push(subResult.srtFilePath);
-            // Read SRT content if path exists
-            if (fs.existsSync(subResult.srtFilePath)) {
-              srtFileTextDb = await fs.promises.readFile(subResult.srtFilePath, 'utf-8');
-            } else {
-              logger.warn(`[${jobId}] Caption-first: SRT file path present in subResult but file not found at ${subResult.srtFilePath}`);
-            }
-            const srtFileName = path.basename(subResult.srtFilePath); 
-            srtFileUrlDb = isProduction 
-              ? await uploadToS3(subResult.srtFilePath, `transcriptions/${jobId}/${srtFileName}`) // Placeholder for S3
-              : `file://${subResult.srtFilePath}`;
-            logger.info(`[${jobId}] Caption-first: SRT file will be at ${srtFileUrlDb}`);
-          }
-          if (subResult.vttFilePath) {
-            filesToCleanUp.push(subResult.vttFilePath);
-            // Read VTT content if path exists
-            if (fs.existsSync(subResult.vttFilePath)) {
-              vttFileTextDb = await fs.promises.readFile(subResult.vttFilePath, 'utf-8');
-            } else {
-              logger.warn(`[${jobId}] Caption-first: VTT file path present in subResult but file not found at ${subResult.vttFilePath}`);
-            }
-            const vttFileName = path.basename(subResult.vttFilePath);
-            vttFileUrlDb = isProduction
-              ? await uploadToS3(subResult.vttFilePath, `transcriptions/${jobId}/${vttFileName}`) // Placeholder for S3
-              : `file://${subResult.vttFilePath}`;
-            logger.info(`[${jobId}] Caption-first: VTT file will be at ${vttFileUrlDb}`);
-          }
-          
-          // The old logic for setting transcriptionFileUrlDb from rawSourceFilePath is now replaced
-          // by the explicit .txt file saving block above.
-
           await job.updateProgress({ percentage: 80, stage: 'subtitles_processed', message: 'Subtitles processed.' });
 
-        } else if (qualityUsed === 'caption_first' && !isYouTubeUrl(url)) {
-            processingError = `Job ${jobId}: 'caption_first' quality is only supported for YouTube URLs. Received: ${url}`;
+        } else if (qualityUsed === 'caption_first' && platform !== 'youtube') {
+            processingError = `Job ${jobId}: 'caption_first' quality is exclusively for YouTube videos. Platform detected: ${platform}.`;
             logger.error(processingError);
-            throw new Error(processingError);
+            await db.update(transcriptionJobs).set({ status: 'failed', statusMessage: processingError, updatedAt: new Date() }).where(eq(transcriptionJobs.id, jobId));
+            throw new Error(processingError); // Go to main catch block
 
         } else { // 'standard' or 'premium' audio transcription
-          audioPath = path.join(tmpDir, `audio_${jobId}_${timestamp}.mp3`);
+          audioPath = path.join(tmpDir, `audio_${jobId}_${videoIdForFilenameSuffix}.mp3`);
           filesToCleanUp.push(audioPath);
-          logger.info(`[${jobId}] Downloading audio for transcription to ${audioPath} (Quality: ${qualityUsed}, URL: ${url})`);
+          logger.info(`[${jobId}] Downloading audio to ${audioPath} (Platform: ${platform}, Quality: ${qualityUsed}, URL: ${url})`);
           await job.updateProgress({ percentage: 30, stage: 'downloading_audio', message: 'Downloading audio file' });
           try {
             await execAsync(`yt-dlp -x --no-warnings --audio-format mp3 -o "${audioPath}" "${url}"`);
@@ -676,11 +643,100 @@ export function startTranscriptionWorker(concurrency = 5) {
             }
             logger.info(`[${jobId}] Audio downloaded successfully to ${audioPath}`);
           } catch (downloadError: unknown) {
-            const downloadErrorMessage = downloadError instanceof Error ? downloadError.message : String(downloadError);
-            processingError = `Failed to download audio for ${jobId}: ${downloadErrorMessage}`;
+            const msg = downloadError instanceof Error ? downloadError.message : String(downloadError);
+            processingError = `Failed to download audio: ${msg}`;
             logger.error(`[${jobId}] Audio download error: ${processingError}`);
             throw new Error(processingError);
           }
+
+          // --- Get duration using ffprobe ---
+          logger.info(`[${jobId}] Getting precise duration using ffprobe for ${audioPath}`);
+          try {
+            const ffprobeCmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioPath}"`;
+            const { stdout: ffprobeOutput } = await execAsync(ffprobeCmd);
+            const durationInSeconds = parseFloat(ffprobeOutput.trim());
+
+            if (!isNaN(durationInSeconds) && durationInSeconds > 0) {
+              videoLengthMinutesActual = Math.max(1, Math.ceil(durationInSeconds / 60));
+              logger.info(`[${jobId}] ffprobe duration: ${durationInSeconds}s, Calculated minutes: ${videoLengthMinutesActual}`);
+              await db.update(transcriptionJobs)
+                .set({ video_length_minutes_actual: videoLengthMinutesActual, updatedAt: new Date() })
+                .where(eq(transcriptionJobs.id, jobId));
+            } else {
+              if (videoLengthMinutesActual !== null) {
+                logger.warn(`[${jobId}] ffprobe failed to return a valid duration. Output: ${ffprobeOutput}. Using initial metadata duration of ${videoLengthMinutesActual} min.`);
+              } else {
+                processingError = `Critical: ffprobe failed to return a valid duration for ${audioPath}. Output: ${ffprobeOutput}. Initial metadata duration also missing.`;
+                logger.error(`[${jobId}] ${processingError}`);
+                throw new Error(processingError);
+              }
+            }
+          } catch (ffprobeError: unknown) {
+            const msg = ffprobeError instanceof Error ? ffprobeError.message : String(ffprobeError);
+            if (videoLengthMinutesActual !== null) {
+                logger.warn(`[${jobId}] ffprobe execution failed for ${audioPath}: ${msg}. Using initial metadata duration of ${videoLengthMinutesActual} min.`);
+            } else {
+                processingError = `Critical: ffprobe execution failed for ${audioPath}: ${msg}. Initial metadata duration also missing.`;
+                logger.error(`[${jobId}] ${processingError}`);
+                throw new Error(processingError);
+            }
+          }
+          
+          // --- Credit Deduction for Standard/Premium (Now that we have reliable duration) ---
+          if (videoLengthMinutesActual === null) { 
+             processingError = `Critical: Video duration could not be determined for ${quality} quality after all attempts. Cannot calculate cost.`;
+             logger.error(`[${jobId}] ${processingError}`);
+             throw new Error(processingError);
+          }
+
+          logger.info(`[${jobId}] STAGE 2 (Deferred): Calculating credit cost for ${quality} (Platform: ${platform}, Duration: ${videoLengthMinutesActual} min).`);
+          await job.updateProgress({ percentage: 40, stage: 'credit_check_audio', message: 'Verifying credits (audio job)' });
+          
+          let transactionTypeStdPrem: typeof creditTransactionTypeEnum.enumValues[number];
+          let actualCostStdPrem: number;
+
+          if (quality === 'standard') {
+            transactionTypeStdPrem = 'standard_transcription';
+            actualCostStdPrem = calculateCreditCost('standard', videoLengthMinutesActual);
+          } else { // premium
+            transactionTypeStdPrem = 'premium_transcription';
+            actualCostStdPrem = calculateCreditCost('premium', videoLengthMinutesActual);
+          }
+          creditsChargedForDB = actualCostStdPrem;
+
+          logger.info(`[${jobId}] Attempting to deduct ${actualCostStdPrem} credits from user ${userId} for ${transactionTypeStdPrem}.`);
+          const creditResultStdPrem = await performCreditTransaction(
+            userId,
+            actualCostStdPrem,
+            transactionTypeStdPrem,
+            { jobId: jobId, videoLengthMinutesCharged: videoLengthMinutesActual }
+          );
+
+          if (!creditResultStdPrem.success) {
+            creditDeductionError = creditResultStdPrem.error || `Credit deduction failed for ${quality}`;
+            processingError = creditDeductionError;
+            logger.error(`[${jobId}] Credit deduction failed: ${processingError}`);
+            await db.update(transcriptionJobs)
+              .set({ 
+                  status: 'failed_insufficient_credits', 
+                  statusMessage: processingError, 
+                  credits_charged: creditsChargedForDB, 
+                  video_length_minutes_actual: videoLengthMinutesActual, 
+                  updatedAt: new Date() 
+              })
+              .where(eq(transcriptionJobs.id, jobId));
+            throw new Error(processingError);
+          }
+          logger.info(`[${jobId}] Credits deducted successfully for ${quality}. New balance: ${creditResultStdPrem.newBalance}.`);
+          await db.update(transcriptionJobs)
+            .set({ 
+                status: 'processing',
+                credits_charged: actualCostStdPrem, 
+                updatedAt: new Date(), 
+                statusMessage: `Credits deducted (${quality}). Starting transcription.` 
+            })
+            .where(eq(transcriptionJobs.id, jobId));
+          // --- End Moved Credit Deduction ---
 
           await job.updateProgress({ percentage: 50, stage: 'transcribing', message: 'Audio transcription in progress' });
           try {
@@ -845,8 +901,7 @@ export function startTranscriptionWorker(concurrency = 5) {
           await job.updateProgress({ percentage: 85, stage: 'generating_summary', message: `Generating ${summary_type} summary...` });
 
           try {
-            const openAIConf = getOpenAIConfig(); // To access credit names from .env via a structured way if needed, or directly use process.env
-            const creditSystemConf = getCreditConfig(); // Already used for transcription credits
+            const creditSystemConf = getCreditConfig();
 
             let summaryCreditCost = 0;
             let summaryTransactionType: typeof creditTransactionTypeEnum.enumValues[number];

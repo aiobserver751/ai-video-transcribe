@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Loader2, CheckCircle } from "lucide-react";
 import { submitJobAction } from "@/lib/actions/jobActions";
 import { checkYouTubeCaptionAvailability } from "@/lib/actions/uiActions";
 import { useUserProfile } from "@/context/UserProfileContext";
@@ -27,21 +27,22 @@ import {
   Alert, AlertDescription, AlertTitle
 } from "@/components/ui/alert";
 import { displayToast } from "@/lib/toastUtils";
+import { getVideoPlatform, isYouTubeUrl } from "@/lib/utils/urlUtils";
 
 // Helper to check for YouTube URL (can be moved to a utils file if used elsewhere)
-const isActuallyYouTubeUrl = (url: string): boolean => {
-  if (!url) return false;
-  try {
-    const parsedUrl = new URL(url);
-    const hostname = parsedUrl.hostname.toLowerCase();
-    return (
-      (hostname === "youtube.com" || hostname === "www.youtube.com") &&
-      parsedUrl.searchParams.has("v")
-    ) || (hostname === "youtu.be" && parsedUrl.pathname.length > 1);
-  } catch {
-    return false;
-  }
-};
+// const isActuallyYouTubeUrl = (url: string): boolean => { // Removed local helper
+//   if (!url) return false;
+//   try {
+//     const parsedUrl = new URL(url);
+//     const hostname = parsedUrl.hostname.toLowerCase();
+//     return (
+//       (hostname === "youtube.com" || hostname === "www.youtube.com") &&
+//       parsedUrl.searchParams.has("v")
+//     ) || (hostname === "youtu.be" && parsedUrl.pathname.length > 1);
+//   } catch {
+//     return false;
+//   }
+// };
 
 const SubmitJobForm = () => {
   const { profile, isLoading: isLoadingProfile } = useUserProfile();
@@ -56,82 +57,87 @@ const SubmitJobForm = () => {
   const [captionCheckError, setCaptionCheckError] = useState<string | null>(null);
   const [captionsAvailable, setCaptionsAvailable] = useState<boolean | null>(null);
   const [estimatedDuration, setEstimatedDuration] = useState<number | null>(null);
+  const [platformSpecificMessage, setPlatformSpecificMessage] = useState<string | null>(null);
 
   const isPaidUser = profile?.subscriptionTier === 'starter' || profile?.subscriptionTier === 'pro';
 
   // Effect to check for captions when URL or quality changes
   useEffect(() => {
-    // Reset other states like captionCheckError, captionsAvailable, etc.
-    // Don't clear fieldErrors.videoUrl here as it might come from the main submission attempt
     setCaptionCheckError(null);
     setCaptionsAvailable(null);
     setEstimatedDuration(null);
+    setPlatformSpecificMessage(null); // Reset platform message
 
-    // If quality is NOT 'caption_first', ensure checking is off and bail out early.
-    if (quality !== "caption_first") {
-      setIsCheckingCaptions(false);
-      return;
-    }
+    const platform = getVideoPlatform(videoUrl);
 
-    // If we reach here, quality IS "caption_first".
-    // Now, check if it's a YouTube URL.
-    if (isActuallyYouTubeUrl(videoUrl)) {
-      setIsCheckingCaptions(true);
-      checkYouTubeCaptionAvailability(videoUrl)
-        .then((result) => {
-          // If an error string is present in the result, the check itself had an issue or yt-dlp failed.
-          if (result.error) {
-            setCaptionCheckError(result.error);
-            setCaptionsAvailable(false); // Can't know if an error occurred during the check
-            setEstimatedDuration(null); // Duration might be null if error happened early
-          } else {
-            // No error from the check function, means yt-dlp call was successful and JSON was parsed.
-            // Now check the actual availability.
-            setCaptionsAvailable(result.captionsAvailable);
-            setEstimatedDuration(result.durationInMinutes ?? null);
-            if (!result.captionsAvailable) {
-              // If the command ran fine but no captions were found, set a specific message.
-              setCaptionCheckError("No English captions (standard or auto) seem to be available for this video.");
+    if (quality === "caption_first") {
+      if (platform === "youtube") {
+        setIsCheckingCaptions(true);
+        checkYouTubeCaptionAvailability(videoUrl)
+          .then((result) => {
+            if (result.error) {
+              setCaptionCheckError(result.error);
+              setCaptionsAvailable(false);
+              setEstimatedDuration(null);
             } else {
-              setCaptionCheckError(null); // Clear any previous error if captions are now found
+              setCaptionsAvailable(result.captionsAvailable);
+              setEstimatedDuration(result.durationInMinutes ?? null);
+              if (!result.captionsAvailable) {
+                setCaptionCheckError("No English captions (standard or auto) seem to be available for this video.");
+              } else {
+                setCaptionCheckError(null);
+              }
             }
-          }
-        })
-        .catch((e: unknown) => {
-          const errorMsg = e instanceof Error ? e.message : String(e);
-          setCaptionCheckError(`An unexpected client-side error occurred: ${errorMsg.substring(0,100)}`);
-          setCaptionsAvailable(false);
-          setEstimatedDuration(null);
-        })
-        .finally(() => {
-          setIsCheckingCaptions(false);
-        });
+          })
+          .catch((e: unknown) => {
+            const errorMsg = e instanceof Error ? e.message : String(e);
+            setCaptionCheckError(`An unexpected client-side error occurred: ${errorMsg.substring(0,100)}`);
+            setCaptionsAvailable(false);
+            setEstimatedDuration(null);
+          })
+          .finally(() => {
+            setIsCheckingCaptions(false);
+          });
+      } else if (platform === "tiktok" || platform === "instagram") {
+        setPlatformSpecificMessage("Caption First quality is only available for YouTube videos. Please select Standard or Premium.");
+        setIsCheckingCaptions(false);
+      } else {
+        // Not a known platform or empty URL, but quality is caption_first
+        setIsCheckingCaptions(false);
+        // Optionally, set a generic message if URL is present but not YT/TikTok/Insta
+        // if (videoUrl) setCaptionCheckError("Caption First is only for YouTube videos.");
+      }
     } else {
-      // Quality is "caption_first", but URL is not a valid YouTube URL (or empty)
+      // Quality is not 'caption_first', no pre-checks needed
       setIsCheckingCaptions(false);
     }
   }, [videoUrl, quality]);
 
   // Form submission handler
   const handleSubmit = async (formData: FormData) => {
-    setFieldErrors({}); // Clear previous field errors
-    // We keep captionCheckError visible if it was set, as it's relevant context
+    setFieldErrors({});
+    // Do not clear captionCheckError or platformSpecificMessage here, they are relevant context
 
     const currentVideoUrl = formData.get("videoUrl") as string;
     const currentQuality = formData.get("quality") as typeof quality;
     const currentSummaryType = summaryType;
+    const platform = getVideoPlatform(currentVideoUrl);
 
-    // Specific check for caption_first before submitting
     if (currentQuality === "caption_first") {
-      if (!isActuallyYouTubeUrl(currentVideoUrl)) {
+      if (platform !== "youtube") {
+        setFieldErrors({ videoUrl: ["Caption First quality is only supported for YouTube URLs."] });
+        if(!platformSpecificMessage) { 
+            displayToast("submitJobForm.youtubeUrlRequiredForCaptionFirst", "error");
+        }
+        return;
+      }
+      if (!isYouTubeUrl(currentVideoUrl)) {
         displayToast("submitJobForm.youtubeUrlRequiredForCaptionFirst", "error");
         setFieldErrors({ videoUrl: ["A YouTube URL is required for Caption First quality."] });
         return;
       }
-      if (captionsAvailable === false && !isCheckingCaptions) { // Check if captions are known to be unavailable
+      if (captionsAvailable === false && !isCheckingCaptions) {
         displayToast("submitJobForm.captionsNotAvailableForCaptionFirst", "error");
-        // fieldErrors for videoUrl might be set by captionCheckError already if it was a yt-dlp issue
-        // If captionCheckError is already set, don't overwrite it with a generic one.
         if (!captionCheckError) {
              setCaptionCheckError("Captions are not available for this video. Please choose another video or quality.");
         }
@@ -141,6 +147,14 @@ const SubmitJobForm = () => {
         displayToast("submitJobForm.checkingCaptionAvailability", "info");
         return;
       }
+    }
+
+    if ((platform === "tiktok" || platform === "instagram") && currentQuality === "caption_first") {
+        setFieldErrors({ quality: ["Caption First is not available for this platform. Please select Standard or Premium."] });
+        if(!platformSpecificMessage){
+            toast.error("Caption First is not available for this platform. Please select Standard or Premium.");
+        }
+        return;
     }
 
     startTransition(async () => {
@@ -197,18 +211,21 @@ const SubmitJobForm = () => {
           setFieldErrors(result.fieldErrors);
           // If the error is for videoUrl, and it's a caption_first YouTube error from the server,
           // it might be redundant with captionCheckError. Prioritize server error here.
-          if (result.fieldErrors.videoUrl && quality === 'caption_first' && isActuallyYouTubeUrl(videoUrl)) {
-            setCaptionCheckError(null); // Clear local caption check error if server gives a videoUrl error for this case
+          if (result.fieldErrors.videoUrl && quality === 'caption_first' && isYouTubeUrl(videoUrl)) {
+            setCaptionCheckError(null); 
           }
         }
       }
     });
   };
   
-  const canSubmit = 
-    !isPending && 
-    !isCheckingCaptions && 
-    (quality !== "caption_first" || !isActuallyYouTubeUrl(videoUrl) || captionsAvailable === true);
+  const isNonYouTubeCaptionFirstSelected = quality === "caption_first" && (getVideoPlatform(videoUrl) === 'tiktok' || getVideoPlatform(videoUrl) === 'instagram');
+
+  const canSubmit =
+    !isPending &&
+    !isCheckingCaptions &&
+    !isNonYouTubeCaptionFirstSelected && 
+    (quality !== "caption_first" || !isYouTubeUrl(videoUrl) || captionsAvailable === true);
 
 
   return (
@@ -224,21 +241,29 @@ const SubmitJobForm = () => {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <label htmlFor="videoUrl" className="text-sm font-medium">
-                Video URL (YouTube, TikTok, Instagram, etc.)
+                Video URL (YouTube, TikTok, Instagram Reel, etc.)
               </label>
               <Input
                 id="videoUrl"
                 name="videoUrl"
-                placeholder="https://www.youtube.com/watch?v=... or other video URL"
+                placeholder="https://www.youtube.com/watch?v=... or TikTok/Instagram Reel URL"
                 value={videoUrl}
                 onChange={(e) => { 
                   setVideoUrl(e.target.value); 
-                  setFieldErrors(prev => ({ ...prev, videoUrl: undefined })); 
+                  setFieldErrors(prev => ({ ...prev, videoUrl: undefined }));
+                  setPlatformSpecificMessage(null); // Reset message on URL change
                 }}
                 required
                 disabled={isPending || isCheckingCaptions}
               />
               {fieldErrors?.videoUrl && <p className="text-xs text-red-500 mt-1">{fieldErrors.videoUrl[0]}</p>}
+              {platformSpecificMessage && (
+                <Alert variant="destructive" className="mt-2">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Information</AlertTitle>
+                  <AlertDescription>{platformSpecificMessage}</AlertDescription>
+                </Alert>
+              )}
             </div>
             <div className="space-y-2">
               <label htmlFor="quality" className="text-sm font-medium">
@@ -248,51 +273,39 @@ const SubmitJobForm = () => {
               <Select
                 value={quality}
                 onValueChange={(value: string) => {
-                  setQuality(value as "caption_first" | "standard" | "premium");
-                  setFieldErrors(prev => ({ ...prev, quality: undefined })); 
+                  setQuality(value as typeof quality);
+                  setFieldErrors(prev => ({ ...prev, quality: undefined }));
+                  setPlatformSpecificMessage(null); // Reset message on quality change
                 }}
                 disabled={isPending || isLoadingProfile || isCheckingCaptions}
               >
-                <SelectTrigger id="quality">
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select quality" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="caption_first">Caption First (YouTube Only)</SelectItem>
-                  <SelectItem value="standard">Standard</SelectItem>
-                  {isPaidUser && <SelectItem value="premium">Premium</SelectItem>}
+                  <SelectItem value="standard">Standard (Audio)</SelectItem>
+                  <SelectItem value="premium">Premium (Audio)</SelectItem>
                 </SelectContent>
               </Select>
               {fieldErrors?.quality && <p className="text-xs text-red-500 mt-1">{fieldErrors.quality[0]}</p>}
-              
-              {/* Dynamic helper text and caption check UI */}
-              <div className="mt-2 text-xs">
-                {isCheckingCaptions && quality === "caption_first" && (
-                  <div className="flex items-center text-muted-foreground">
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Checking for available YouTube captions...
-                  </div>
-                )}
-                {captionCheckError && quality === "caption_first" && isActuallyYouTubeUrl(videoUrl) && (
-                   <Alert variant="destructive" className="mt-2">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertTitle>Caption Issue</AlertTitle>
-                    <AlertDescription>{captionCheckError}</AlertDescription>
-                  </Alert>
-                )}
-                {captionsAvailable && quality === "caption_first" && isActuallyYouTubeUrl(videoUrl) && !captionCheckError && (
-                  <div className="text-green-600">
-                    YouTube captions detected. {estimatedDuration ? `Estimated video duration: ${estimatedDuration} min.` : ''}
-                  </div>
-                )}
-                 <p className="text-gray-500 mt-1">
-                  {quality === "caption_first"
-                    ? "Fastest option for YouTube videos if captions are available. Uses existing YouTube captions (manual or auto-generated) and converts to text."
-                    : quality === "standard"
-                    ? "Good balance of accuracy and speed for various platforms (YouTube, TikTok, etc.)."
-                    : "Highest accuracy, suitable for critical audio from various platforms."
-                  }
-                </p>
-              </div>
+              {captionCheckError && quality === 'caption_first' && isYouTubeUrl(videoUrl) && (
+                <Alert variant={captionsAvailable === false ? "destructive" : "default"} className="mt-2">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>{captionsAvailable === false ? "Captions Unavailable" : "Caption Info"}</AlertTitle>
+                  <AlertDescription>{captionCheckError}</AlertDescription>
+                </Alert>
+              )}
+              {captionsAvailable && quality === 'caption_first' && isYouTubeUrl(videoUrl) && !captionCheckError && (
+                <Alert variant="default" className="mt-2">
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <AlertTitle className="text-green-700">Captions Available</AlertTitle>
+                  <AlertDescription className="text-green-600">
+                    YouTube captions detected. 
+                    {estimatedDuration ? `Estimated video duration: ${estimatedDuration} min.` : ''}
+                  </AlertDescription>
+                </Alert>
+              )}
             </div>
 
             {/* NEW: Summary Type Selection */}
@@ -309,7 +322,7 @@ const SubmitJobForm = () => {
                   }}
                   disabled={isPending || isLoadingProfile || isCheckingCaptions}
                 >
-                  <SelectTrigger id="summary_type">
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select summary type" />
                   </SelectTrigger>
                   <SelectContent>

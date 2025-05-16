@@ -7,41 +7,33 @@ import { revalidatePath } from "next/cache"; // To trigger re-fetching on the da
 import { getAuthSession } from "@/lib/auth"; // Import the session utility
 import { addTranscriptionJob } from "@/lib/queue/transcription-queue";
 import { logger } from '../logger';
+import { getVideoPlatform, isValidPlatformUrl } from "@/lib/utils/urlUtils"; // Added import
 
 // Define an enum for summary types (can be moved to a shared location if needed)
 const summaryTypeEnum = z.enum(['none', 'basic', 'extended']);
 
 // Input schema validation using Zod
 const SubmitJobSchema = z.object({
-  videoUrl: z.string().url({ message: "Please enter a valid URL." }),
+  videoUrl: z.string().url({ message: "Please enter a valid URL." })
+    .refine(url => isValidPlatformUrl(url), { // Ensure it's a supported platform
+      message: "Invalid video URL. Only YouTube, TikTok, and Instagram Reels are supported."
+    }),
   quality: z.enum(qualityEnum.enumValues),
-  summary_type: summaryTypeEnum.optional().default('none'), // NEW: Add summary_type
+  summary_type: summaryTypeEnum.optional().default('none'),
 }).superRefine((data, ctx) => {
+  const platform = getVideoPlatform(data.videoUrl);
   if (data.quality === 'caption_first') {
-    try {
-      const parsedUrl = new URL(data.videoUrl);
-      const hostname = parsedUrl.hostname.toLowerCase(); // Normalize hostname
-      const isYouTube = (hostname === "youtube.com" || hostname === "www.youtube.com") && parsedUrl.searchParams.has("v");
-      const isYoutuBe = hostname === "youtu.be" && parsedUrl.pathname.length > 1;
-
-      if (!isYouTube && !isYoutuBe) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "For 'Caption First' quality, a valid YouTube video URL is required (e.g., youtube.com?v=VIDEO_ID or youtu.be/VIDEO_ID). Other platforms are not supported for this quality setting.",
-          path: ["videoUrl"],
-        });
-      }
-    } catch {
-      // This might happen if the URL is malformed, though z.string().url() should catch it first.
+    if (platform !== 'youtube') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Invalid URL format. Please enter a valid video URL.",
+        message: "For 'Caption First' quality, a valid YouTube video URL is required. Other platforms like TikTok and Instagram Reels are not supported for this quality setting.",
         path: ["videoUrl"],
       });
     }
+    // No need for the try-catch for URL parsing here as z.string().url() and getVideoPlatform handle it
   }
-  // No specific cross-field validation needed if quality is not 'caption_first',
-  // as any valid URL is accepted then.
+  // No specific cross-field validation needed if quality is not 'caption_first'
+  // and platform is YouTube, as any valid URL from a supported platform is accepted then.
 });
 
 export async function submitJobAction(formData: FormData) {

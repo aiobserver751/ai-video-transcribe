@@ -4,7 +4,14 @@ import type { AdapterAccount } from "next-auth/adapters"; // Import AdapterAccou
 
 // --- Enums ---
 // Define an enum for job status
-export const jobStatusEnum = pgEnum('job_status', ['pending', 'processing', 'completed', 'failed', 'failed_insufficient_credits', 'pending_credit_deduction']);
+export const jobStatusEnum = pgEnum('job_status', [
+  'pending', 
+  'processing',           // General processing after initial checks/credits
+  'completed', 
+  'failed',
+  'failed_insufficient_credits', // Specific failure for credits
+  'pending_credit_deduction'     // Initial status before credits are handled
+]);
 // Define an enum for quality level - UPDATED
 export const qualityEnum = pgEnum('quality', ['caption_first', 'standard', 'premium']);
 // Define an enum for job origin

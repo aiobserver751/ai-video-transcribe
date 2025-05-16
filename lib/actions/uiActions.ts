@@ -1,46 +1,28 @@
 "use server";
 
-import { z } from "zod";
+// import { z } from "zod"; // Removed unused import
 import { exec } from "child_process";
 import { promisify } from "util";
 import { logger } from "@/lib/logger"; // Assuming logger setup
+import { isYouTubeUrl } from "@/lib/utils/urlUtils"; // Added import
 
 const execAsync = promisify(exec);
 
-const YouTubeUrlSchema = z.string().refine(
-  (url) => {
-    try {
-      const parsedUrl = new URL(url);
-      const hostname = parsedUrl.hostname.toLowerCase();
-      return (
-        (hostname === "youtube.com" || hostname === "www.youtube.com") &&
-        parsedUrl.searchParams.has("v")
-      ) || (hostname === "youtu.be" && parsedUrl.pathname.length > 1);
-    } catch {
-      return false;
-    }
-  },
-  { message: "Invalid YouTube URL format." }
-);
-
-// Helper to check for YouTube URL (already defined in jobActions.ts and transcription-queue.ts, consider moving to a shared util)
-// For this action, we only care if it's a YouTube URL for the caption check specifically.
-function isYouTubeUrlForUICheck(url: string): boolean {
-  const validation = YouTubeUrlSchema.safeParse(url);
-  return validation.success;
-}
+// Removed YouTubeUrlSchema and isYouTubeUrlForUICheck as we now use the centralized isYouTubeUrl
 
 export async function checkYouTubeCaptionAvailability(url: string): Promise<{
   captionsAvailable: boolean;
   durationInMinutes: number | null;
   error?: string;
 }> {
-  if (!isYouTubeUrlForUICheck(url)) {
-    return { captionsAvailable: false, durationInMinutes: null, error: 'Not a YouTube URL' };
+  if (!isYouTubeUrl(url)) { // Use imported isYouTubeUrl
+    // If it's not a YouTube URL, captions are considered unavailable by this function's scope.
+    // The SubmitJobForm will show a more specific message for TikTok/Instagram if caption_first is selected.
+    return { captionsAvailable: false, durationInMinutes: null, error: 'Caption checking is only applicable to YouTube URLs.' };
   }
 
   try {
-    logger.info(`[uiActions] Checking caption/duration for URL (using -j): ${url}`);
+    logger.info(`[uiActions] Checking caption/duration for YouTube URL (using -j): ${url}`);
     
     // Single call to yt-dlp to get all metadata as JSON
     const command = `yt-dlp -j --no-warnings --skip-download "${url}"`; // Added --skip-download for safety, though -j implies it.
