@@ -20,7 +20,7 @@ const DashboardSidebar = () => {
   // Add href to menu items
   const primaryMenuItems = [
     { id: "dashboard", label: "Dashboard", icon: Home, href: "/dashboard" },
-    { id: "jobs", label: "My Jobs", icon: FileText, href: "/jobs" }, // Assuming /jobs route exists or will exist
+    { id: "jobs", label: "My transcriptions", icon: FileText, href: "/jobs" }, // Assuming /jobs route exists or will exist
     { id: "new", label: "New Transcription", icon: Plus, href: "/transcribe" }, // Assuming /transcribe route exists or will exist
   ];
 

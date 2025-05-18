@@ -22,21 +22,49 @@ const plans = [
         name: "Free Plan",
         priceId: null,
         priceMonthly: 0,
-        features: ["Standard quality transcriptions", "5-10 Credits daily"],
+        features: [
+            "50 credits to start + 10 credits every 3 days",
+            "Up to ~1.5 hours of Standard transcription",
+            "Up to 50 YouTube caption downloads (1 credit each)",
+            "Plain text, VTT & SRT export formats",
+            "Never expires - use at your own pace",
+            "Basic video metadata",
+            "72-hour support response time"
+        ],
         tier: 'free',
     },
     {
         name: "Starter Plan",
         priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_STARTER || null,
         priceMonthly: 9.99,
-        features: ["1000 Credits monthly", "Standard + Premium quality"],
+        features: [
+            "300 credits refreshed monthly",
+            "Up to ~10 hours of Standard transcription",
+            "OR up to ~5 hours of Premium transcription",
+            "OR up to 300 YouTube caption downloads",
+            "Basic & Extended summaries",
+            "Content intelligence Hub",
+            "Plain text, VTT & SRT export formats",
+            "API access",
+            "48-hour support response time"
+        ],
         tier: 'starter',
     },
     {
         name: "Pro Plan",
         priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_PRO || null,
         priceMonthly: 19.99,
-        features: ["5000 Credits monthly", "Standard + Premium quality", "AI Summaries"],
+        features: [
+            "750 credits refreshed monthly",
+            "Up to ~25 hours of Standard transcription",
+            "OR up to ~12.5 hours of Premium transcription",
+            "OR up to 750 YouTube caption downloads",
+            "Basic & Extended summaries",
+            "Content intelligence Hub",      
+            "Plain text & SRT export formats",
+            "API access",
+            "24-hour support response time"
+        ],
         tier: 'pro',
     },
 ];
@@ -70,14 +98,16 @@ export default function BillingPage() {
         const { url, error } = await createBillingPortalSession();
         if (error) {
             displayToast("billingPage.billingPortalError", "error", { error });
+            setIsLoadingAction(null); // Reset loading state on error
         } else if (url) {
-            window.location.href = url; // Redirect to Stripe
-             // Keep loading active as we navigate away
-             return; // Prevent resetting loading state immediately
+            window.open(url, '_blank'); // Open in new tab
+            setIsLoadingAction(null); // Reset loading state after opening
+            // No return here, as the original page remains active
         } else {
             displayToast("billingPage.billingPortalUrlError", "error");
+            setIsLoadingAction(null); // Reset loading state on error
         }
-        setIsLoadingAction(null); // Reset loading state only on error or no URL
+        // setIsLoadingAction(null); // This line is now handled within the if/else blocks
     };
 
     // Display loading or current plan info
@@ -109,6 +139,12 @@ export default function BillingPage() {
                     <CardDescription>
                         You are currently on the <span className="font-semibold">{capitalizeFirstLetter(currentTier)}</span> plan.
                     </CardDescription>
+                    {/* Add renewal date display for paid tiers */}
+                    {(currentTier === 'starter' || currentTier === 'pro') && profile?.stripeCurrentPeriodEnd && !profile.subscriptionCancelledAtPeriodEnd && (
+                        <CardDescription className="pt-1">
+                            Your plan renews on <span className="font-semibold">{format(new Date(profile.stripeCurrentPeriodEnd), 'PPP')}</span>.
+                        </CardDescription>
+                    )}
                 </CardHeader>
                 {/* Show Manage button only if on a paid plan */}
                 {currentTier !== 'free' && (

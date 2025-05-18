@@ -24,12 +24,13 @@ const plans = [
     name: "Starter Plan",
     price: "$9.99",
     features: [
-      "300 credits refreshed monthly",
+     "300 credits refreshed monthly",
       "Up to ~10 hours of Standard transcription",
       "OR up to ~5 hours of Premium transcription",
       "OR up to 300 YouTube caption downloads",
       "Basic & Extended summaries",
-      "Text & SRT export formats",
+      "Content intelligence Hub",
+      "Plain text, VTT & SRT export formats",
       "API access",
       "48-hour support response time"
     ],
@@ -44,8 +45,9 @@ const plans = [
       "Up to ~25 hours of Standard transcription",
       "OR up to ~12.5 hours of Premium transcription",
       "OR up to 750 YouTube caption downloads",
-      "Basic & Extended summaries with new content ideas",      
-      "Text & SRT export formats",
+      "Basic & Extended summaries",
+      "Content intelligence Hub",      
+      "Plain text & SRT export formats",
       "API access",
       "24-hour support response time"
     ],

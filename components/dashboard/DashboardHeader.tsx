@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 // import { useRouter } from "next/navigation"; // Remove unused import
-import { Bell, Search, Coins } from "lucide-react";
+import { Coins } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { useUserProfile } from "@/context/UserProfileContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -27,7 +27,7 @@ const DashboardHeader = () => {
           {/* Mobile menu button is handled in layout now */}
         </div>
         
-        <div className="hidden md:flex items-center gap-4 flex-1">
+        {/* <div className="hidden md:flex items-center gap-4 flex-1">
           <div className="relative w-64">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500 dark:text-gray-400" />
             <input
@@ -36,13 +36,13 @@ const DashboardHeader = () => {
               className="w-full rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 pl-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             />
           </div>
-        </div>
+        </div> */}
         
-        <div className="flex items-center gap-4">
-          <button className="relative w-8 h-8 rounded-full flex items-center justify-center text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
+        <div className="flex items-center gap-4 ml-auto">
+          {/* <button className="relative w-8 h-8 rounded-full flex items-center justify-center text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
             <Bell className="h-5 w-5" />
             <span className="absolute top-0 right-0 h-2 w-2 rounded-full bg-red-500"></span>
-          </button>
+          </button> */}
 
           {/* Credit Balance Display */}
           <div className="flex items-center gap-1 text-sm">

@@ -1,16 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ArrowRight } from "lucide-react";
-import { useRouter } from "next/navigation";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 
 interface LandingHeroProps {
   onDemoLogin: () => void;
@@ -18,25 +9,6 @@ interface LandingHeroProps {
 }
 
 const LandingHero = ({ onDemoLogin, isLoading }: LandingHeroProps) => {
-  const router = useRouter();
-  const [showGoogleDialog, setShowGoogleDialog] = useState(false);
-  const [localIsLoading, setLocalIsLoading] = useState(false);
-
-  const handleLoginClick = () => {
-    setShowGoogleDialog(true);
-  };
-
-  const handleGoogleAccountSelect = (email: string) => {
-    console.log(`Selected Google account: ${email}`);
-    setShowGoogleDialog(false);
-    setLocalIsLoading(true);
-    
-    setTimeout(() => {
-      router.push("/dashboard");
-      setLocalIsLoading(false);
-    }, 500);
-  };
-
   return (
     <>
       <section className="w-full py-12 md:py-24 lg:py-32 xl:py-40 bg-white">
@@ -54,20 +26,12 @@ const LandingHero = ({ onDemoLogin, isLoading }: LandingHeroProps) => {
               <div className="flex flex-col gap-2 min-[400px]:flex-row">
                 <Button 
                   onClick={onDemoLogin} 
-                  disabled={isLoading || localIsLoading}
+                  disabled={isLoading}
                   size="lg" 
                   className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 >
-                  {isLoading || localIsLoading ? "Signing in..." : "Try Demo"}
-                  {!isLoading && !localIsLoading && <ArrowRight className="ml-2 h-4 w-4" />}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="lg"
-                  onClick={handleLoginClick}
-                  disabled={isLoading || localIsLoading}
-                >
-                  Sign in with Google
+                  {isLoading ? "Signing in..." : "Sign up for free (no credit card required)"}
+                  {!isLoading && <ArrowRight className="ml-2 h-4 w-4" />}
                 </Button>
               </div>
             </div>
@@ -83,65 +47,7 @@ const LandingHero = ({ onDemoLogin, isLoading }: LandingHeroProps) => {
           </div>
         </div>
       </section>
-
-      <Dialog open={showGoogleDialog} onOpenChange={setShowGoogleDialog}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Sign in with Google</DialogTitle>
-            <DialogDescription>
-              Choose an account to continue to TranscribeYT
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col space-y-3 py-4">
-            <GoogleAccount 
-              email="user@gmail.com" 
-              name="John Doe"
-              onClick={() => handleGoogleAccountSelect("user@gmail.com")}
-            />
-            <GoogleAccount 
-              email="work@gmail.com" 
-              name="John Doe (Work)"
-              onClick={() => handleGoogleAccountSelect("work@gmail.com")}
-            />
-            <GoogleAccount 
-              email="personal@gmail.com" 
-              name="John Doe (Personal)"
-              onClick={() => handleGoogleAccountSelect("personal@gmail.com")}
-            />
-            <div className="mt-2 flex justify-center">
-              <Button variant="outline" size="sm">
-                Use another account
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </>
-  );
-};
-
-const GoogleAccount = ({ 
-  email, 
-  name, 
-  onClick 
-}: { 
-  email: string; 
-  name: string; 
-  onClick: () => void 
-}) => {
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center space-x-3 rounded-md border p-3 hover:bg-slate-100 transition-colors text-left w-full"
-    >
-      <div className="h-10 w-10 overflow-hidden rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-medium">
-        {name.charAt(0)}
-      </div>
-      <div>
-        <p className="font-medium">{name}</p>
-        <p className="text-sm text-gray-500">{email}</p>
-      </div>
-    </button>
   );
 };
 
