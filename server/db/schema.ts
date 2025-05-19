@@ -164,6 +164,7 @@ export const transcriptionJobs = pgTable('transcription_jobs', {
     userIdx: index('job_user_id_idx').on(table.userId),
     statusIdx: index('job_status_idx').on(table.status),
     originIdx: index('job_origin_idx').on(table.origin),
+    userCreatedAtIdx: index('job_user_created_at_idx').on(table.userId, table.createdAt),
   };
 });
 
@@ -185,6 +186,7 @@ export const creditTransactions = pgTable('credit_transactions', {
     userIdx: index('credit_transactions_user_id_idx').on(table.userId),
     jobIdx: index('credit_transactions_job_id_idx').on(table.jobId),
     typeIdx: index('credit_transactions_type_idx').on(table.type),
+    userCreatedAtIdx: index('credit_tx_user_created_at_idx').on(table.userId, table.created_at),
   };
 });
 

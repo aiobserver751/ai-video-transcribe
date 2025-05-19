@@ -2,7 +2,7 @@
 
 import Link from 'next/link'; // Import Link
 import { usePathname } from 'next/navigation'; // Import usePathname
-import { Home, FileText, Settings, Plus, User, CreditCard, BarChart3 } from "lucide-react";
+import { Home, FileText, Settings, Plus, User, CreditCard, BarChart3, Lightbulb } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -29,6 +29,10 @@ const DashboardSidebar = () => {
     { id: "settings", label: "Settings", icon: Settings, href: "/settings" },
     { id: "billing", label: "Billing", icon: CreditCard, href: "/billing" },
     { id: "usage", label: "Usage", icon: BarChart3, href: "/usage" },
+  ];
+
+  const contentIntelligenceMenuItems = [
+    { id: "content-ideas", label: "Content Ideas", icon: Lightbulb, href: "/content-ideas" },
   ];
 
   return (
@@ -75,6 +79,24 @@ const DashboardSidebar = () => {
             </Link>
           ))}
 
+          <Separator className="my-4" />
+
+          <p className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Content Intelligence</p>
+          {/* Content Intelligence Menu Items - Use Link */}
+          {contentIntelligenceMenuItems.map((item) => (
+            <Link key={item.id} href={item.href} passHref legacyBehavior>
+              <Button
+                variant="ghost"
+                className={cn(
+                  "w-full justify-start gap-2 font-normal hover:bg-gray-100",
+                  pathname === item.href && "bg-gray-100 text-indigo-600"
+                )}
+              >
+                <item.icon className="h-5 w-5" />
+                {item.label}
+              </Button>
+            </Link>
+          ))}
           <Separator className="my-4" />
 
           <p className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Account Setup</p>

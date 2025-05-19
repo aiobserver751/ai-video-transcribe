@@ -127,6 +127,13 @@
       "when": 1747302953984,
       "tag": "0017_workable_wiccan",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1747665794326,
+      "tag": "0018_square_amphibian",
+      "breakpoints": true
     }
   ]
 }
