@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { logger } from './logger.js';
 
 // Rate limit configuration with defaults based on free tier
 interface RateLimitConfig {

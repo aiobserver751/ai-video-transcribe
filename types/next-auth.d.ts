@@ -1,5 +1,4 @@
 import { DefaultSession } from "next-auth";
-import { JWT } from "next-auth/jwt";
 
 // Define the user type from your schema
 type UserType = "normal" | "google";

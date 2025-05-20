@@ -4,7 +4,6 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
-import { writeFile } from 'fs/promises';
 import axios from 'axios';
 import FormData from 'form-data';
 
@@ -36,50 +35,16 @@ async function getAudioDuration(filePath: string): Promise<number> {
 // Sleep function for delay between retries
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-/**
- * Merges multiple transcriptions while handling overlaps between chunks
- * to prevent duplicate content
- */
-function mergeTranscriptions(transcriptions: string[]): string {
-  const result = transcriptions.map((text, index) => {
-    if (index === 0) return text;
-    
-    // Find overlap between chunks
-    const previousEnd = transcriptions[index - 1].split(/[.!?]+/).slice(-2).join('. ');
-    
-    // Remove duplicate content
-    if (text.includes(previousEnd)) {
-      return text.replace(previousEnd, '');
-    }
-    return text;
-  }).join(' ');
-  
-  return result;
-}
-
-// Helper function to save transcription text to a file
-async function saveTranscriptionToFile(text: string, baseFilename: string, extension: 'txt' | 'srt' | 'vtt' = 'txt'): Promise<string> {
-  const outputDir = path.join(process.cwd(), 'tmp');
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-  const outputFilename = `${path.basename(baseFilename, path.extname(baseFilename))}_groq_${Date.now()}.${extension}`;
-  const outputPath = path.join(outputDir, outputFilename);
-  await writeFile(outputPath, text, 'utf-8');
-  logger.info(`Groq transcription ${extension.toUpperCase()} saved to: ${outputPath}`);
-  return outputPath;
-}
-
 // Function to extract plain text from Groq's verbose_json response
-export function extractTextFromVerboseJson(verboseJson: any): string {
+export function extractTextFromVerboseJson(verboseJson: GroqVerboseJsonResponse | Record<string, unknown>): string {
   if (verboseJson && typeof verboseJson.text === 'string') {
     return verboseJson.text;
   }
   // Fallback or more complex extraction if verboseJson.text is not directly available
   // This might involve iterating over segments if verboseJson.text isn't populated
   // For now, assuming verboseJson.text is the primary source as per OpenAI/Groq examples.
-  if (verboseJson && Array.isArray(verboseJson.segments)) {
-    return verboseJson.segments.map((segment: any) => segment.text).join(' ').trim();
+  if (verboseJson && Array.isArray((verboseJson as GroqVerboseJsonResponse).segments)) {
+    return (verboseJson as GroqVerboseJsonResponse).segments.map((segment: GroqVerboseJsonResponse['segments'][number]) => segment.text).join(' ').trim();
   }
   logger.warn('Could not extract plain text from verbose_json', verboseJson);
   return '';
@@ -180,7 +145,7 @@ async function transcribeChunkWithGroq(chunkPath: string, audioDuration: number)
           logger.warn('Unexpected verbose_json response format:', response.data);
           throw new Error('Unexpected verbose_json response format from Groq API');
         }
-      } catch (axiosError: any) {
+      } catch (axiosError: unknown) {
         if (axios.isAxiosError(axiosError)) {
           logger.error('Axios error details:', axiosError.response?.data || axiosError.message);
           

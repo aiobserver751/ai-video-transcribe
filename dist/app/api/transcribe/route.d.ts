@@ -5,7 +5,7 @@ export declare function POST(request: Request): Promise<NextResponse<{
     status_message: string;
 }> | NextResponse<{
     transcription: string;
-    quality: any;
+    quality: unknown;
     status_code: number;
     status_message: string;
 }>>;

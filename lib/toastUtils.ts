@@ -35,7 +35,7 @@ function getNestedProperty(obj: ToastsConfig, path: string): MessageObject | und
   for (const part of parts) {
     if (current && typeof current === 'object' && part in current) {
       // Type assertion is needed here as TypeScript cannot guarantee the shape at each step of dynamic traversal
-      current = (current as any)[part]; 
+      current = (current as { [key: string]: unknown })[part]; 
     } else {
       current = undefined;
       break;

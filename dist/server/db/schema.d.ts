@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-empty-object-type */
 export declare const jobStatusEnum: import("drizzle-orm/pg-core").PgEnum<["pending", "processing", "completed", "failed"]>;
 export declare const qualityEnum: import("drizzle-orm/pg-core").PgEnum<["standard", "premium"]>;
 export declare const users: import("drizzle-orm/pg-core").PgTableWithColumns<{

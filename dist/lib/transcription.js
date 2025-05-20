@@ -7,8 +7,11 @@ const execAsync = promisify(exec);
 const statAsync = promisify(fs.stat);
 // Defined but flagged as unused by linter previously.
 // Keeping it as fs.mkdirSync is used later, indicating intent.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const mkdirAsync = promisify(fs.mkdir);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const MAX_FILE_SIZE_MB = 25; // Example constant, ensure it's used if needed elsewhere or remove.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function getFileSizeMB(filePath) {
     // Ensure statAsync is used if needed, otherwise remove if getFileSizeMB is unused.
     // Currently getFileSizeMB is not called within this file after removing compressAudio/transcribeChunk.
