@@ -33,7 +33,7 @@ export default function AccountPage() {
         <div className="p-6">
             <Alert variant="destructive">
                 <AlertTitle>Error Loading Profile</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
+                <AlertDescription>{error.message}</AlertDescription>
             </Alert>
         </div>
         );
