@@ -139,7 +139,8 @@ export async function POST(request: Request) {
         logger.info(`Rate limits: ${usageStats.hourlyUsed}/${usageStats.hourlyLimit} seconds used this hour`);
         
         try {
-          transcription = await transcribeAudioWithGroq(audioPath);
+          const groqResponse = await transcribeAudioWithGroq(audioPath);
+          transcription = groqResponse.text;
         } catch (groqError) {
           // Check if error is related to rate limits and fallback is enabled
           const errorMessage = groqError instanceof Error ? groqError.message : String(groqError);
@@ -147,7 +148,8 @@ export async function POST(request: Request) {
           if (fallbackOnRateLimit && errorMessage.includes('rate_limit_exceeded')) {
             logger.warn('Groq rate limit exceeded. Falling back to standard transcription...');
             qualityUsed = 'standard';
-            transcription = await transcribeAudio(audioPath);
+            const standardTranscriptionResult = await transcribeAudio(audioPath);
+            transcription = fs.readFileSync(standardTranscriptionResult.txtPath, 'utf-8');
           } else if (errorMessage.includes('rate_limit_exceeded') || errorMessage.includes('Rate limit would be exceeded')) {
             // Get updated rate limit info for the error response
             const usageStats = rateLimitTracker.getUsageStats();
@@ -187,7 +189,8 @@ export async function POST(request: Request) {
         }
       } else {
         logger.info('Using standard open-source Whisper transcription');
-        transcription = await transcribeAudio(audioPath);
+        const standardTranscriptionResult = await transcribeAudio(audioPath);
+        transcription = fs.readFileSync(standardTranscriptionResult.txtPath, 'utf-8');
       }
     } catch (transcriptionError) {
       logger.error('Transcription error:', transcriptionError);
