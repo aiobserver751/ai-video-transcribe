@@ -1,5 +1,5 @@
-import { startTranscriptionWorker } from './transcription-queue.js';
-import { logger } from '../logger.js';
+import { startTranscriptionWorker } from './transcription-queue';
+import { logger } from '../logger';
 
 // Flag to track whether workers have been initialized
 let workersInitialized = false;
