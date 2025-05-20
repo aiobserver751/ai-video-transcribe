@@ -1,4 +1,3 @@
-
 export default function LandingFeatures() {
   return (
     <section className="w-full py-12 md:py-24 lg:py-32 bg-gray-50" id="features">
@@ -60,7 +59,7 @@ export default function LandingFeatures() {
             </div>
             <h3 className="text-lg font-bold">Fast Processing</h3>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Our advanced system processes your transcription quickly and notifies you when it's ready.
+              Our advanced system processes your transcription quickly and notifies you when it&apos;s ready.
             </p>
           </div>
           <div className="grid gap-2">
