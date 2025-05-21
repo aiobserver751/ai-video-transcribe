@@ -3,6 +3,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
+import { getTmpPath } from './storageService.ts';
 
 const execAsync = promisify(exec);
 // const statAsync = promisify(fs.stat); // No longer needed as getFileSizeMB is removed
@@ -17,7 +18,8 @@ const execAsync = promisify(exec);
  */
 export async function transcribeAudio(audioPath: string): Promise<{ txtPath: string; srtPath: string; vttPath: string; }> {
   const totalStartTime = Date.now();
-  const outputDir = path.join(process.cwd(), 'tmp');
+  // Use the tmp path from the storage service
+  const outputDir = getTmpPath();
   const inputBasename = path.basename(audioPath, path.extname(audioPath));
   
   const outputTxtFilename = `${inputBasename}.txt`;

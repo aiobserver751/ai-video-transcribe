@@ -24,6 +24,7 @@ import {
 import { generateOpenAISummary } from '../../server/services/openaiService.ts';
 // --- URL Utils Import ---
 import { getVideoPlatform } from "@/lib/utils/urlUtils"; // REMOVED isYouTubeUrlUtil import
+import { storageService, getTmpPath } from '../../lib/storageService.ts';
 
 const execAsync = promisify(exec);
 
@@ -248,25 +249,54 @@ function generateVttFromGroqVerboseJson(verboseJson: GroqVerboseJsonResponse): s
   return vttContent;
 }
 
-// Helper function to save content to a temp file and return its path
-// (Reusing a modified version of saveTranscriptionToFile from groq-transcription.ts for consistency,
-// but this could be a more generic utility)
+// Helper function to save content to storage and return its path
 async function saveContentToFile(
   content: string,
-  baseFileName: string, // baseFileName from jobData, e.g., original video name
+  baseFileName: string,
   jobId: string,
-  extension: 'txt' | 'srt' | 'vtt'
+  extension: 'txt' | 'srt' | 'vtt',
+  userId: string
 ): Promise<{filePath: string, fileNameWithExt: string}> {
-  const outputDir = path.join(process.cwd(), 'tmp', jobId); // Store in a job-specific subfolder
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
   // Use a more descriptive name
   const fileNameWithExt = `${path.basename(baseFileName, path.extname(baseFileName))}_${jobId}.${extension}`;
-  const filePath = path.join(outputDir, fileNameWithExt);
-  await fs.promises.writeFile(filePath, content, 'utf-8');
-  logger.info(`[${jobId}] Saved ${extension.toUpperCase()} content to: ${filePath}`);
-  return {filePath, fileNameWithExt};
+  
+  // Storage path for user files (users/<USER_ID>/...)
+  const storagePath = `users/${userId}/jobs/${jobId}/${fileNameWithExt}`;
+  
+  try {
+    await storageService.saveFile(content, storagePath, extension === 'txt' ? 'text/plain' : 'text/plain');
+    logger.info(`[${jobId}] Saved ${extension.toUpperCase()} content to storage: ${storagePath}`);
+    
+    // For local processing, we still need to maintain the local tmp files in the tmp dir
+    const jobTmpDir = path.join(getTmpPath(), jobId);
+    if (!fs.existsSync(jobTmpDir)) {
+      fs.mkdirSync(jobTmpDir, { recursive: true });
+    }
+    
+    const localFilePath = path.join(jobTmpDir, fileNameWithExt);
+    // Only write to local tmp if it doesn't exist and we're in an environment that needs it
+    if (!fs.existsSync(localFilePath)) {
+      await fs.promises.writeFile(localFilePath, content, 'utf-8');
+    }
+    
+    // Return the storage path for URL generation and the file name for reference
+    return { filePath: storagePath, fileNameWithExt };
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error(`[${jobId}] Error saving ${extension} content: ${errMsg}`);
+    throw error;
+  }
+}
+
+// Replace uploadToS3 function with a function to generate URLs
+async function generateFileUrl(filePath: string): Promise<string> {
+  try {
+    return await storageService.getFileUrl(filePath);
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error(`Error generating file URL: ${errMsg}`);
+    return ''; // Return empty string on error
+  }
 }
 
 // Process transcription jobs
@@ -280,8 +310,8 @@ export function startTranscriptionWorker(concurrency = 5) {
       const platform = getVideoPlatform(url);
       logger.info(`[${jobId}] Detected platform: ${platform}`);
 
-      const tmpDir = path.join(process.cwd(), 'tmp');
-      // const videoIdForFilename = url.split('v=')[1]?.split('&')[0] || url.split('youtu.be/')[1] || Date.now().toString(); // OLD
+      // Use the tmp path from the storage service
+      const tmpDir = getTmpPath();
       
       // Generate a unique part for filenames, fallback to timestamp if no common video ID pattern matches
       let videoIdForFilenameSuffix = Date.now().toString();
@@ -324,11 +354,6 @@ export function startTranscriptionWorker(concurrency = 5) {
 
       const isProduction = process.env.NODE_ENV === 'production';
       const effectiveBaseFileName = baseFileName || jobId;
-
-      async function uploadToS3(filePath: string, s3Key: string): Promise<string> {
-        logger.info(`[${jobId}] Placeholder: Uploading ${filePath} to S3 as ${s3Key}`);
-        return `s3://placeholder-bucket/${s3Key}`;
-      }
 
       // Helper to clean up specified files if they exist
       async function cleanupFiles(files: string[]) {
@@ -537,10 +562,17 @@ export function startTranscriptionWorker(concurrency = 5) {
                 filesToCleanUp.push(downloadedSrtPath);
                 srtFileTextDb = srtContent;
                 plainTextFromSubs = extractPlainText(srtContent, 'srt');
-                const srtFileName = path.basename(downloadedSrtPath);
-                srtFileUrlDb = isProduction
-                  ? await uploadToS3(downloadedSrtPath, `transcriptions/${jobId}/${srtFileName}`)
-                  : `file://${downloadedSrtPath}`;
+                
+                // Save to proper storage
+                const { filePath: srtStoragePath } = await saveContentToFile(
+                  srtContent,
+                  effectiveBaseFileName,
+                  jobId,
+                  'srt',
+                  userId
+                );
+                
+                srtFileUrlDb = await generateFileUrl(srtStoragePath);
                 logger.info(`[${jobId}] Caption-first: SRT file will be at ${srtFileUrlDb}`);
               } else {
                 logger.warn(`[${jobId}:youtube_subs_srt] SRT file downloaded but was empty. Will attempt VTT next. Cleaning up: ${srtOutputName}`);
@@ -569,10 +601,17 @@ export function startTranscriptionWorker(concurrency = 5) {
                 downloadedVttPath = vttOutputName;
                 filesToCleanUp.push(downloadedVttPath);
                 vttFileTextDb = vttContent;
-                const vttFileName = path.basename(downloadedVttPath);
-                vttFileUrlDb = isProduction
-                  ? await uploadToS3(downloadedVttPath, `transcriptions/${jobId}/${vttFileName}`)
-                  : `file://${downloadedVttPath}`;
+                
+                // Save to proper storage
+                const { filePath: vttStoragePath } = await saveContentToFile(
+                  vttContent,
+                  effectiveBaseFileName,
+                  jobId,
+                  'vtt',
+                  userId
+                );
+                
+                vttFileUrlDb = await generateFileUrl(vttStoragePath);
                 logger.info(`[${jobId}] Caption-first: VTT file will be at ${vttFileUrlDb}`);
                 if (!plainTextFromSubs) { // Only use VTT for plaintext if SRT didn't yield it
                   plainTextFromSubs = extractPlainText(vttContent, 'vtt');
@@ -611,12 +650,19 @@ export function startTranscriptionWorker(concurrency = 5) {
             const txtFilePath = `${txtFileBase}.txt`;
             await fs.promises.writeFile(txtFilePath, transcriptionText, 'utf-8');
             filesToCleanUp.push(txtFilePath); 
-            const txtFileName = path.basename(txtFilePath);
-            transcriptionFileUrlDb = isProduction
-              ? await uploadToS3(txtFilePath, `transcriptions/${jobId}/${txtFileName}`)
-              : `file://${txtFilePath}`;
+            
+            // Save to proper storage
+            const { filePath: txtStoragePath } = await saveContentToFile(
+              transcriptionText,
+              effectiveBaseFileName,
+              jobId,
+              'txt',
+              userId
+            );
+            
+            transcriptionFileUrlDb = await generateFileUrl(txtStoragePath);
             finalFileUrl = transcriptionFileUrlDb;
-            logger.info(`[${jobId}] Caption-first plain text saved to ${txtFilePath}. URL: ${transcriptionFileUrlDb}`);
+            logger.info(`[${jobId}] Caption-first plain text saved to storage. URL: ${transcriptionFileUrlDb}`);
           } else {
             logger.warn(`[${jobId}] transcriptionText was null or empty for caption_first after subtitle processing, .txt file not saved.`);
             // This might be an error condition if no plain text could be derived.
@@ -757,17 +803,16 @@ export function startTranscriptionWorker(concurrency = 5) {
               // 1. Extract and save plain text
               transcriptionText = extractTextFromVerboseJson(groqVerboseJson);
               if (transcriptionText) {
-                const {filePath: txtFilePath, fileNameWithExt: txtFileName} = await saveContentToFile(
+                const {filePath: txtStoragePath} = await saveContentToFile(
                   transcriptionText,
                   effectiveBaseFileName,
                   jobId,
-                  'txt'
+                  'txt',
+                  userId
                 );
-                filesToCleanUp.push(txtFilePath);
-                transcriptionFileUrlDb = isProduction
-                  ? await uploadToS3(txtFilePath, `transcriptions/${jobId}/${txtFileName}`)
-                  : `file://${txtFilePath}`; 
-                finalFileUrl = transcriptionFileUrlDb; 
+                filesToCleanUp.push(txtStoragePath);
+                transcriptionFileUrlDb = await generateFileUrl(txtStoragePath);
+                finalFileUrl = transcriptionFileUrlDb;
                 logger.info(`[${jobId}] Groq .txt content processed. URL: ${transcriptionFileUrlDb}`);
               } else {
                 logger.warn(`[${jobId}] No plain text extracted from Groq verbose_json.`);
@@ -777,16 +822,15 @@ export function startTranscriptionWorker(concurrency = 5) {
               // 2. Generate and save SRT
               srtFileTextDb = generateSrtFromGroqVerboseJson(groqVerboseJson);
               if (srtFileTextDb) {
-                const {filePath: srtFilePath, fileNameWithExt: srtFileName} = await saveContentToFile(
+                const {filePath: srtStoragePath} = await saveContentToFile(
                   srtFileTextDb,
                   effectiveBaseFileName,
                   jobId,
-                  'srt'
+                  'srt',
+                  userId
                 );
-                filesToCleanUp.push(srtFilePath);
-                srtFileUrlDb = isProduction
-                  ? await uploadToS3(srtFilePath, `transcriptions/${jobId}/${srtFileName}`)
-                  : `file://${srtFilePath}`;
+                filesToCleanUp.push(srtStoragePath);
+                srtFileUrlDb = await generateFileUrl(srtStoragePath);
                 logger.info(`[${jobId}] Groq .srt content processed. URL: ${srtFileUrlDb}`);
               } else {
                 logger.warn(`[${jobId}] No SRT content generated from Groq verbose_json.`);
@@ -795,16 +839,15 @@ export function startTranscriptionWorker(concurrency = 5) {
               // 3. Generate and save VTT
               vttFileTextDb = generateVttFromGroqVerboseJson(groqVerboseJson);
               if (vttFileTextDb) {
-                const {filePath: vttFilePath, fileNameWithExt: vttFileName} = await saveContentToFile(
+                const {filePath: vttStoragePath} = await saveContentToFile(
                   vttFileTextDb,
                   effectiveBaseFileName,
                   jobId,
-                  'vtt'
+                  'vtt',
+                  userId
                 );
-                filesToCleanUp.push(vttFilePath);
-                vttFileUrlDb = isProduction
-                  ? await uploadToS3(vttFilePath, `transcriptions/${jobId}/${vttFileName}`)
-                  : `file://${vttFilePath}`;
+                filesToCleanUp.push(vttStoragePath);
+                vttFileUrlDb = await generateFileUrl(vttStoragePath);
                 logger.info(`[${jobId}] Groq .vtt content processed. URL: ${vttFileUrlDb}`);
               } else {
                 logger.warn(`[${jobId}] No VTT content generated from Groq verbose_json.`);
@@ -816,37 +859,66 @@ export function startTranscriptionWorker(concurrency = 5) {
               
               filesToCleanUp.push(whisperResult.txtPath, whisperResult.srtPath, whisperResult.vttPath);
               
+              // Read file contents for standard Whisper
               transcriptionText = await fs.promises.readFile(whisperResult.txtPath, 'utf-8');
-              // Read SRT and VTT file contents for standard Whisper
+              
+              // Read SRT file
+              let srtContent = null;
               if (fs.existsSync(whisperResult.srtPath)) {
-                srtFileTextDb = await fs.promises.readFile(whisperResult.srtPath, 'utf-8');
+                srtContent = await fs.promises.readFile(whisperResult.srtPath, 'utf-8');
+                srtFileTextDb = srtContent;
               } else {
                 logger.warn(`[${jobId}] Standard Whisper: SRT file not found at ${whisperResult.srtPath}`);
               }
+              
+              // Read VTT file
+              let vttContent = null;
               if (fs.existsSync(whisperResult.vttPath)) {
-                vttFileTextDb = await fs.promises.readFile(whisperResult.vttPath, 'utf-8');
+                vttContent = await fs.promises.readFile(whisperResult.vttPath, 'utf-8');
+                vttFileTextDb = vttContent;
               } else {
                 logger.warn(`[${jobId}] Standard Whisper: VTT file not found at ${whisperResult.vttPath}`);
               }
               
-              // whisperResult paths are already absolute paths in tmpDir
-              const txtFileName = path.basename(whisperResult.txtPath);
-              const srtFileName = path.basename(whisperResult.srtPath);
-              const vttFileName = path.basename(whisperResult.vttPath);
-
-              transcriptionFileUrlDb = isProduction
-                ? `s3_placeholder_url_for/${jobId}/${txtFileName}`
-                : `file:///${whisperResult.txtPath}`; // Added file:/// prefix
-              srtFileUrlDb = isProduction
-                ? `s3_placeholder_url_for/${jobId}/${srtFileName}`
-                : `file:///${whisperResult.srtPath}`; // Added file:/// prefix
-              vttFileUrlDb = isProduction
-                ? `s3_placeholder_url_for/${jobId}/${vttFileName}`
-                : `file:///${whisperResult.vttPath}`; // Added file:/// prefix
+              // Save the files to storage and get URLs
+              
+              // Save TXT file
+              const { filePath: txtStoragePath } = await saveContentToFile(
+                transcriptionText,
+                effectiveBaseFileName,
+                jobId,
+                'txt',
+                userId
+              );
+              transcriptionFileUrlDb = await generateFileUrl(txtStoragePath);
+              
+              // Save SRT file if available
+              if (srtContent) {
+                const { filePath: srtStoragePath } = await saveContentToFile(
+                  srtContent,
+                  effectiveBaseFileName,
+                  jobId,
+                  'srt',
+                  userId
+                );
+                srtFileUrlDb = await generateFileUrl(srtStoragePath);
+              }
+              
+              // Save VTT file if available
+              if (vttContent) {
+                const { filePath: vttStoragePath } = await saveContentToFile(
+                  vttContent,
+                  effectiveBaseFileName,
+                  jobId,
+                  'vtt',
+                  userId
+                );
+                vttFileUrlDb = await generateFileUrl(vttStoragePath);
+              }
               
               finalFileUrl = transcriptionFileUrlDb; // TXT content is the primary for standard whisper
 
-              logger.info(`[${jobId}] Standard Whisper produced TXT, SRT, VTT. URLs: TXT: ${transcriptionFileUrlDb}, SRT: ${srtFileUrlDb}, VTT: ${vttFileUrlDb}`);
+              logger.info(`[${jobId}] Standard Whisper processed. URLs: TXT: ${transcriptionFileUrlDb}, SRT: ${srtFileUrlDb}, VTT: ${vttFileUrlDb}`);
             }
           } catch (transcriptionError: unknown) {
             const transcriptionErrorMessage = transcriptionError instanceof Error ? transcriptionError.message : String(transcriptionError);
@@ -860,24 +932,62 @@ export function startTranscriptionWorker(concurrency = 5) {
                 
                 const whisperResultFallback = await transcribeAudio(audioPath!);
                 filesToCleanUp.push(whisperResultFallback.txtPath, whisperResultFallback.srtPath, whisperResultFallback.vttPath);
+                
+                // Read file contents
                 transcriptionText = await fs.promises.readFile(whisperResultFallback.txtPath, 'utf-8');
-
-                const fallbackTxtFileName = path.basename(whisperResultFallback.txtPath);
-                const fallbackSrtFileName = path.basename(whisperResultFallback.srtPath);
-                const fallbackVttFileName = path.basename(whisperResultFallback.vttPath);
-
-                transcriptionFileUrlDb = isProduction
-                  ? `s3_placeholder_url_for/${jobId}/${fallbackTxtFileName}`
-                  : `file:///${whisperResultFallback.txtPath}`; // Added file:/// prefix
-                srtFileUrlDb = isProduction
-                  ? `s3_placeholder_url_for/${jobId}/${fallbackSrtFileName}`
-                  : `file:///${whisperResultFallback.srtPath}`; // Added file:/// prefix
-                vttFileUrlDb = isProduction
-                  ? `s3_placeholder_url_for/${jobId}/${fallbackVttFileName}`
-                  : `file:///${whisperResultFallback.vttPath}`; // Added file:/// prefix
+                
+                // Read SRT file
+                let fallbackSrtContent = null;
+                if (fs.existsSync(whisperResultFallback.srtPath)) {
+                  fallbackSrtContent = await fs.promises.readFile(whisperResultFallback.srtPath, 'utf-8');
+                  srtFileTextDb = fallbackSrtContent;
+                }
+                
+                // Read VTT file
+                let fallbackVttContent = null;
+                if (fs.existsSync(whisperResultFallback.vttPath)) {
+                  fallbackVttContent = await fs.promises.readFile(whisperResultFallback.vttPath, 'utf-8');
+                  vttFileTextDb = fallbackVttContent;
+                }
+                
+                // Save the files to storage and get URLs
+                
+                // Save TXT file
+                const { filePath: fallbackTxtStoragePath } = await saveContentToFile(
+                  transcriptionText,
+                  effectiveBaseFileName,
+                  jobId,
+                  'txt',
+                  userId
+                );
+                transcriptionFileUrlDb = await generateFileUrl(fallbackTxtStoragePath);
+                
+                // Save SRT file if available
+                if (fallbackSrtContent) {
+                  const { filePath: fallbackSrtStoragePath } = await saveContentToFile(
+                    fallbackSrtContent,
+                    effectiveBaseFileName,
+                    jobId,
+                    'srt',
+                    userId
+                  );
+                  srtFileUrlDb = await generateFileUrl(fallbackSrtStoragePath);
+                }
+                
+                // Save VTT file if available
+                if (fallbackVttContent) {
+                  const { filePath: fallbackVttStoragePath } = await saveContentToFile(
+                    fallbackVttContent,
+                    effectiveBaseFileName,
+                    jobId,
+                    'vtt',
+                    userId
+                  );
+                  vttFileUrlDb = await generateFileUrl(fallbackVttStoragePath);
+                }
                 
                 finalFileUrl = transcriptionFileUrlDb;
-                logger.info(`[${jobId}] Fallback to Standard Whisper produced TXT, SRT, VTT. URLs set. TXT: ${transcriptionFileUrlDb}`);
+                logger.info(`[${jobId}] Fallback to Standard Whisper processed. URLs set. TXT: ${transcriptionFileUrlDb}`);
                 processingError = null; // Clear previous Groq error as fallback succeeded
             } else {
                 throw new Error(processingError); 
