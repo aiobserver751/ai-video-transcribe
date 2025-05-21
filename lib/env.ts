@@ -1,4 +1,3 @@
-import { config } from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.ts';
@@ -7,12 +6,18 @@ import { logger } from './logger.ts';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load environment variables from .env file
-const result = config({ path: path.resolve(__dirname, '../.env') });
-
-if (result.error) {
-  logger.error('Error loading .env file:', result.error);
-  throw new Error('Failed to load environment variables');
+// Conditionally load .env file
+if (process.env.NODE_ENV !== 'production') {
+  const dotenv = await import('dotenv');
+  const result = dotenv.config({ path: path.resolve(__dirname, '../.env') });
+  if (result.error) {
+    logger.error('Error loading .env file during development:', result.error);
+    // Optionally, decide if this should throw or just warn during development
+  }
+} else {
+  // In production, variables are expected to be set in the environment
+  // Optional: Log that we are in production and relying on system env vars
+  logger.info('Running in production mode, relying on system environment variables.');
 }
 
 // Validate required environment variables

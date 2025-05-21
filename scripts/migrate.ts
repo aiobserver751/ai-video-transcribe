@@ -1,9 +1,10 @@
 import { migrate } from 'drizzle-orm/neon-http/migrator';
 import { db } from '../server/db/index.ts'; // Added .ts extension
-import * as dotenv from 'dotenv';
+// import * as dotenv from 'dotenv'; // dotenv loading is handled by server/db/index.ts
 
-// Load environment variables
-dotenv.config({ path: '.env' });
+// Environment variables should be loaded by the imported 'db' module from server/db/index.ts
+// if NODE_ENV is not 'production'.
+// dotenv.config({ path: '.env' }); // Removed this line
 
 async function runMigrations() {
   console.log('Starting database migrations...');

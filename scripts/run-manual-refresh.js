@@ -1,17 +1,31 @@
 import http from 'http';
-import dotenv from 'dotenv';
-dotenv.config();
+// import dotenv from 'dotenv'; // Will be conditionally imported
 
-// Load environment variables from .env if you use it for local secrets
-// If you're not using dotenv, ensure LOCAL_CRON_SCRIPT_SECRET is available in your environment
-// import dotenv from 'dotenv'; // Example if using ESM for dotenv
-// dotenv.config(); 
+async function main() {
+  // Conditionally load dotenv only if not in production and a key var isn't already set
+  if (process.env.NODE_ENV !== 'production' && !process.env.LOCAL_CRON_SCRIPT_SECRET) {
+    try {
+      const dotenv = await import('dotenv');
+      dotenv.config();
+      console.log('dotenv loaded by script.');
+    } catch (e) {
+      console.warn('dotenv could not be loaded by script:', e.message);
+    }
+  }
 
-const PORT = process.env.PORT || 3000; 
-// This should now reliably load from your .env file if dotenv ran correctly
-const LOCAL_SCRIPT_SECRET = process.env.LOCAL_CRON_SCRIPT_SECRET || "your-default-manual-script-secret"; // Use a default if not set, but prefer .env
+  // Load environment variables from .env if you use it for local secrets
+  // If you're not using dotenv, ensure LOCAL_CRON_SCRIPT_SECRET is available in your environment
+  // import dotenv from 'dotenv'; // Example if using ESM for dotenv
+  // dotenv.config(); 
 
-async function triggerRefresh() {
+  const PORT = process.env.PORT || 3000; 
+  // This should now reliably load from your .env file if dotenv ran correctly
+  const LOCAL_SCRIPT_SECRET = process.env.LOCAL_CRON_SCRIPT_SECRET || "your-default-manual-script-secret"; // Use a default if not set, but prefer .env
+
+  await triggerRefresh(PORT, LOCAL_SCRIPT_SECRET);
+}
+
+async function triggerRefresh(PORT, LOCAL_SCRIPT_SECRET) {
   console.log(`[${new Date().toISOString()}] Manually triggering refreshFreeTierCredits job via script...`);
   console.log(`Targeting: http://localhost:${PORT}/api/dev/trigger-refresh-credits`);
 
@@ -70,4 +84,7 @@ async function triggerRefresh() {
   req.end();
 }
 
-triggerRefresh(); 
+main().catch(err => {
+  console.error("Script execution failed:", err);
+  process.exit(1);
+}); 

@@ -1,10 +1,14 @@
 import { drizzle } from 'drizzle-orm/neon-http';
 import { neon } from '@neondatabase/serverless'; // Import neon function
 import * as schema from './schema.ts';
-import * as dotenv from 'dotenv';
+// import * as dotenv from 'dotenv'; // Will be conditionally imported
 import { logger } from '@/lib/logger'; // Added logger import
 
-dotenv.config({ path: '.env' });
+// Conditionally load dotenv only if not in production
+if (process.env.NODE_ENV !== 'production') {
+  const dotenv = await import('dotenv');
+  dotenv.config({ path: '.env' });
+}
 
 const databaseUrl = process.env.DATABASE_URL;
 
