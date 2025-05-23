@@ -40,6 +40,9 @@ ENV NEXTAUTH_SECRET="dummy-secret-for-build"
 ENV REDIS_HOST="localhost"
 ENV REDIS_PORT="6379"
 ENV REDIS_PASSWORD="dummy-password"
+ENV GOOGLE_CLIENT_ID="dummy-google-client-id"
+ENV GOOGLE_CLIENT_SECRET="dummy-google-client-secret"
+ENV NEXTAUTH_URL="http://localhost:3000"
 
 RUN npm run build
 
