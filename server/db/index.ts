@@ -34,4 +34,17 @@ async function testConnection() {
   }
 }
 
-testConnection(); 
+// Only test connection if not in build mode or if database connection checks are not disabled
+const isBuilding = process.env.NODE_ENV === 'production' && 
+                  (process.env.SKIP_STATIC_GENERATION === 'true' || 
+                   process.env.DISABLE_STATIC_GENERATION === 'true' ||
+                   process.env.NO_DATABASE_CONNECTION === 'true' ||
+                   process.env.DISABLE_DB_CHECKS === 'true' ||
+                   process.env.BUILD_SKIP_STATIC_GENERATION === 'true' ||
+                   process.env.NEXT_PHASE === 'phase-production-build');
+
+if (!isBuilding) {
+  testConnection();
+} else {
+  logger.info('[Database] Skipping database connection test during build phase');
+} 
