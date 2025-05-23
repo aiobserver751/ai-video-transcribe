@@ -5,9 +5,6 @@ FROM node:20.18.0-alpine AS base
 RUN apk add --no-cache \
     python3 \
     py3-pip \
-    python3-dev \
-    py3-setuptools \
-    py3-wheel \
     make \
     g++ \
     gcc \
@@ -16,13 +13,11 @@ RUN apk add --no-cache \
     curl \
     wget \
     git \
-    ffmpeg \
-    openssl-dev \
-    libffi-dev
+    ffmpeg
 
-# Upgrade pip and install yt-dlp
-RUN pip3 install --upgrade pip setuptools wheel
-RUN pip3 install --no-cache-dir yt-dlp
+# Install yt-dlp using the recommended method for Alpine
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+RUN chmod a+rx /usr/local/bin/yt-dlp
 
 # Verify installations
 RUN ffmpeg -version && ffprobe -version && yt-dlp --version
@@ -44,17 +39,13 @@ RUN npm run build
 FROM node:20.18.0-alpine AS runner
 WORKDIR /app
 
-# Install only runtime system dependencies (no build tools needed)
+# Install only runtime system dependencies
 RUN apk add --no-cache \
     python3 \
     ffmpeg
 
-# Copy Python packages including yt-dlp from the base stage
-COPY --from=base /usr/lib/python3.12 /usr/lib/python3.12
-COPY --from=base /usr/bin/yt-dlp /usr/bin/yt-dlp
-
-# Create symbolic links for python commands
-RUN ln -sf /usr/bin/python3 /usr/bin/python
+# Copy yt-dlp binary from the base stage
+COPY --from=base /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 
 ENV NODE_ENV production
 
