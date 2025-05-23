@@ -183,6 +183,7 @@ export interface ContentIdeaJobDetails extends ContentIdeaJobForList {
   resultJson?: ContentIdeaResultJson | null; // Use the new specific interface
   parentTranscriptionText?: string | null;
   completedAt?: string | null; // Changed from Date | null to string | null
+  creditsCharged: number;
 }
 
 export async function getContentIdeaJobDetailsAction(jobId: string): Promise<{
@@ -211,6 +212,7 @@ export async function getContentIdeaJobDetailsAction(jobId: string): Promise<{
         statusMessage: contentIdeaJobs.statusMessage,
         resultTxt: contentIdeaJobs.resultTxt,
         resultJson: contentIdeaJobs.resultJson,
+        creditsCharged: contentIdeaJobs.creditsCharged,
         parentTranscriptionId: contentIdeaJobs.transcriptionId, // Alias for clarity if preferred
         // Fields from parent transcriptionJobs
         parentVideoUrl: transcriptionJobs.videoUrl,
@@ -239,6 +241,7 @@ export async function getContentIdeaJobDetailsAction(jobId: string): Promise<{
       status: jobFromDb.status as typeof jobStatusEnum.enumValues[number],
       jobType: jobFromDb.jobType as typeof contentIdeaJobTypeEnum.enumValues[number],
       resultJson: jobFromDb.resultJson as ContentIdeaResultJson | null,
+      creditsCharged: jobFromDb.creditsCharged,
     };
 
     // Ensure the returned object is plain for Next.js serialization

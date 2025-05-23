@@ -186,7 +186,7 @@ export default function ContentIdeaDetailPage({ params }: ContentIdeaJobDetailPa
         <div className="md:col-span-1 space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Job Properties</CardTitle>
+              <CardTitle>Content Analysis Info</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div>
@@ -218,6 +218,12 @@ export default function ContentIdeaDetailPage({ params }: ContentIdeaJobDetailPa
                  <div>
                   <h4 className="font-medium mb-0.5">Completed:</h4>
                   <p className="text-muted-foreground">{format(new Date(job.completedAt), "PPpp")}</p>
+                </div>
+              )}
+              {typeof job.creditsCharged === 'number' && job.creditsCharged >= 0 && (
+                <div>
+                  <h4 className="font-medium mb-0.5">Credits Charged:</h4>
+                  <p className="text-muted-foreground">{job.creditsCharged}</p>
                 </div>
               )}
             </CardContent>
