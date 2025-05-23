@@ -33,6 +33,11 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+# Set dummy environment variables for build process
+ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
+ENV NEXTAUTH_SECRET="dummy-secret-for-build"
+
 RUN npm run build
 
 # Production image - create a clean runtime image
@@ -47,7 +52,7 @@ RUN apk add --no-cache \
 # Copy yt-dlp binary from the base stage
 COPY --from=base /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 
-ENV NODE_ENV production
+ENV NODE_ENV=production
 
 # Create user for security
 RUN addgroup --system --gid 1001 nodejs
@@ -68,7 +73,7 @@ USER nextjs
 
 EXPOSE 3000
 
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
 CMD ["node", "server.js"] 
