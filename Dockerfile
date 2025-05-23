@@ -48,6 +48,7 @@ ENV S3_ACCESS_KEY="dummy-access-key"
 ENV S3_SECRET_KEY="dummy-secret-key"
 ENV S3_BUCKET_NAME="dummy-bucket"
 ENV S3_REGION="us-east-1"
+ENV STRIPE_SECRET_KEY="sk_test_dummy_key_for_build"
 
 # Skip static generation during build to avoid database connections
 ENV SKIP_STATIC_GENERATION="true"
