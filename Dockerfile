@@ -44,15 +44,17 @@ RUN npm run build
 FROM node:20.18.0-alpine AS runner
 WORKDIR /app
 
-# Install only runtime system dependencies (smaller image)
+# Install only runtime system dependencies (no build tools needed)
 RUN apk add --no-cache \
     python3 \
-    py3-pip \
     ffmpeg
 
-# Install yt-dlp in production image with minimal dependencies
-RUN pip3 install --upgrade pip
-RUN pip3 install --no-cache-dir yt-dlp
+# Copy Python packages including yt-dlp from the base stage
+COPY --from=base /usr/lib/python3.12 /usr/lib/python3.12
+COPY --from=base /usr/bin/yt-dlp /usr/bin/yt-dlp
+
+# Create symbolic links for python commands
+RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 ENV NODE_ENV production
 
