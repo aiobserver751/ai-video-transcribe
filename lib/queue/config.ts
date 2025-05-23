@@ -58,6 +58,7 @@ export const createRedisConnection = () => {
 export const QUEUE_NAMES = {
   TRANSCRIPTION: 'transcription',
   AUDIO_CHUNK: 'audio-chunk',
+  CONTENT_IDEAS: 'content-ideas',
 };
 
 // Priority values (higher number = higher priority)

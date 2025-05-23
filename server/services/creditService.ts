@@ -7,7 +7,25 @@ import { logger } from "@/lib/logger"; // Assuming you might want to use logger 
 logger.info('[CreditService] Credit Service DB instance:', db ? 'Loaded' : 'Not Loaded'); // DIAGNOSTIC LOG
 
 // --- Environment Variable Loading & Validation ---
-const creditEnvSchema = z.object({FREE_TIER_INITIAL_CREDITS: z.coerce.number().int().positive(), FREE_TIER_REFRESH_CREDITS: z.coerce.number().int().positive(),FREE_TIER_REFRESH_INTERVAL_DAYS: z.coerce.number().int().positive(),  FREE_TIER_MAX_CREDITS: z.coerce.number().int().positive(),STARTER_TIER_MONTHLY_CREDITS: z.coerce.number().int().positive(),  PRO_TIER_MONTHLY_CREDITS: z.coerce.number().int().positive(),  CREDITS_CAPTION_FIRST_FIXED: z.coerce.number().int().positive(),  CREDITS_PER_10_MIN_STANDARD: z.coerce.number().int().positive(),  CREDITS_PER_10_MIN_PREMIUM: z.coerce.number().int().positive(),  CREDITS_BASIC_SUMMARY_FIXED: z.coerce.number().int().positive(),  CREDITS_EXTENDED_SUMMARY_FIXED: z.coerce.number().int().positive(),});
+const creditEnvSchema = z.object({
+  FREE_TIER_INITIAL_CREDITS: z.coerce.number().int().positive(), 
+  FREE_TIER_REFRESH_CREDITS: z.coerce.number().int().positive(),
+  FREE_TIER_REFRESH_INTERVAL_DAYS: z.coerce.number().int().positive(),  
+  FREE_TIER_MAX_CREDITS: z.coerce.number().int().positive(),
+  STARTER_TIER_MONTHLY_CREDITS: z.coerce.number().int().positive(),  
+  PRO_TIER_MONTHLY_CREDITS: z.coerce.number().int().positive(),  
+  CREDITS_CAPTION_FIRST_FIXED: z.coerce.number().int().positive(),  
+  CREDITS_PER_10_MIN_STANDARD: z.coerce.number().int().positive(),  
+  CREDITS_PER_10_MIN_PREMIUM: z.coerce.number().int().positive(),  
+  CREDITS_BASIC_SUMMARY_FIXED: z.coerce.number().int().positive(),  
+  CREDITS_EXTENDED_SUMMARY_FIXED: z.coerce.number().int().positive(),
+  // Added new content idea credit costs
+  CONTENT_IDEA_NORMAL_CREDIT_COST: z.coerce.number().int().nonnegative(), // Can be 0 if free
+  CONTENT_IDEA_COMMENT_SMALL_CREDIT_COST: z.coerce.number().int().nonnegative(),
+  CONTENT_IDEA_COMMENT_MEDIUM_CREDIT_COST: z.coerce.number().int().nonnegative(),
+  CONTENT_IDEA_COMMENT_LARGE_CREDIT_COST: z.coerce.number().int().nonnegative(),
+  CONTENT_IDEA_COMMENT_XLARGE_CREDIT_COST: z.coerce.number().int().nonnegative(),
+});
 let creditConfig: ReturnType<typeof creditEnvSchema.parse> | undefined;
 
 export function getCreditConfig() {
@@ -25,6 +43,12 @@ export function getCreditConfig() {
         CREDITS_PER_10_MIN_PREMIUM: process.env.CREDITS_PER_10_MIN_PREMIUM,
         CREDITS_BASIC_SUMMARY_FIXED: process.env.CREDITS_BASIC_SUMMARY_FIXED,
         CREDITS_EXTENDED_SUMMARY_FIXED: process.env.CREDITS_EXTENDED_SUMMARY_FIXED,
+        // Added new content idea credit costs
+        CONTENT_IDEA_NORMAL_CREDIT_COST: process.env.CONTENT_IDEA_NORMAL_CREDIT_COST,
+        CONTENT_IDEA_COMMENT_SMALL_CREDIT_COST: process.env.CONTENT_IDEA_COMMENT_SMALL_CREDIT_COST,
+        CONTENT_IDEA_COMMENT_MEDIUM_CREDIT_COST: process.env.CONTENT_IDEA_COMMENT_MEDIUM_CREDIT_COST,
+        CONTENT_IDEA_COMMENT_LARGE_CREDIT_COST: process.env.CONTENT_IDEA_COMMENT_LARGE_CREDIT_COST,
+        CONTENT_IDEA_COMMENT_XLARGE_CREDIT_COST: process.env.CONTENT_IDEA_COMMENT_XLARGE_CREDIT_COST,
       });
     } catch (error) {
       logger.error("[CreditService] Invalid credit system environment variables:", error); // Changed to logger
@@ -67,6 +91,7 @@ export function calculateCreditCost(
 // --- Credit Management Service ---
 interface PerformCreditTransactionDetails {
   jobId?: string;
+  contentIdeaJobId?: string;
   videoLengthMinutesCharged?: number;
   customDescription?: string;
 }
@@ -186,6 +211,7 @@ export async function performCreditTransaction(
         .values({
           userId: userId,
           jobId: details.jobId || null,
+          contentIdeaJobId: details.contentIdeaJobId || null,
           amount: actualAmountProcessed, // Log the actual amount processed
           type: transactionType,
           description: description,

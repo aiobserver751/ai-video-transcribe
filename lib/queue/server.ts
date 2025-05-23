@@ -1,4 +1,5 @@
 import { startTranscriptionWorker } from './transcription-queue';
+import { startContentIdeasWorker } from './content-ideas-queue';
 import { logger } from '../logger';
 
 // Flag to track whether workers have been initialized
@@ -13,16 +14,20 @@ export function initializeQueueWorkers() {
 
   try {
     // Start transcription worker with desired concurrency
-    const concurrency = parseInt(process.env.TRANSCRIPTION_CONCURRENCY || '3', 10);
-    
-    logger.info(`Starting transcription worker with concurrency: ${concurrency}`);
-    const worker = startTranscriptionWorker(concurrency);
+    const transcriptionConcurrency = parseInt(process.env.TRANSCRIPTION_CONCURRENCY || '3', 10);
+    logger.info(`Starting transcription worker with concurrency: ${transcriptionConcurrency}`);
+    const transcriptionWorker = startTranscriptionWorker(transcriptionConcurrency);
+
+    // Start content ideas worker with desired concurrency
+    const contentIdeasConcurrency = parseInt(process.env.CONTENT_IDEAS_CONCURRENCY || '2', 10);
+    logger.info(`Starting content ideas worker with concurrency: ${contentIdeasConcurrency}`);
+    const contentIdeasWorker = startContentIdeasWorker(contentIdeasConcurrency);
     
     logger.info('Queue workers initialized successfully');
     workersInitialized = true;
     
-    // Return the worker instance for potential shutdown
-    return { transcriptionWorker: worker };
+    // Return the worker instances for potential shutdown
+    return { transcriptionWorker, contentIdeasWorker };
   } catch (error) {
     logger.error('Failed to initialize queue workers:', error);
     throw error;

@@ -13,19 +13,36 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Download, ExternalLink, Clock, Loader2 } from "lucide-react";
+import { ArrowLeft, Download, ExternalLink, Clock, Loader2, Lightbulb } from "lucide-react";
 import { format } from "date-fns";
 import Image from 'next/image'; // Import next/image
-// import Link from "next/link"; // Removed unused import
 import axios from "axios";
 import { logger } from "@/lib/logger";
 import { useQuery } from "@tanstack/react-query"; 
 import type { TranscriptionJob as GlobalTranscriptionJobType } from "@/lib/types"; // Using type import
+import { createContentIdeaJobAction, type CreateContentIdeaJobResult } from "@/app/actions/contentIdeaActions"; // Import the server action and its result type
+import Link from 'next/link'; // For linking to the new content idea job
+import { contentIdeaJobTypeEnum } from '@/server/db/schema'; // NEW IMPORT
+import { getVideoPlatform } from '@/lib/utils/urlUtils'; // NEW IMPORT
+import { // NEW IMPORTS for DropdownMenu
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // Extend the global type or define a local one that includes summaries
 interface TranscriptionJob extends GlobalTranscriptionJobType {
   basicSummary?: string | null;
   extendedSummary?: string | null;
+}
+
+// NEW: State for content idea generation process
+interface ContentIdeaGenerationState {
+  isLoading: boolean;
+  error: string | null;
+  successMessage: string | null;
+  newJobId: string | null; 
 }
 
 interface JobDetailPageProps {
@@ -129,6 +146,12 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
   const { jobId } = params;
   const router = useRouter();
   const [isClientForDownload, setIsClientForDownload] = useState(false);
+  const [contentIdeaState, setContentIdeaState] = useState<ContentIdeaGenerationState>({
+    isLoading: false,
+    error: null,
+    successMessage: null,
+    newJobId: null,
+  });
 
   useEffect(() => {
     setIsClientForDownload(true);
@@ -145,7 +168,7 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
     enabled: !!jobId,
     refetchInterval: (query) => {
       const jobData = query.state.data;
-      if (jobData?.status === "completed" || jobData?.status === "failed") {
+      if (jobData?.status === "completed" || jobData?.status === "failed" || jobData?.status === "failed_insufficient_credits") { // Also stop polling on credit failure
         return false;
       }
       return 5000;
@@ -218,6 +241,60 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
     URL.revokeObjectURL(url);
   };
 
+  // NEW: Handler for initiating content idea generation
+  const handleGenerateContentIdeas = async (jobType: typeof contentIdeaJobTypeEnum.enumValues[number]) => {
+    if (!job || job.status !== 'completed') {
+      setContentIdeaState({
+        isLoading: false,
+        error: "Content ideas can only be generated for completed transcription jobs.",
+        successMessage: null,
+        newJobId: null,
+      });
+      return;
+    }
+
+    setContentIdeaState({
+      isLoading: true,
+      error: null,
+      successMessage: null,
+      newJobId: null,
+    });
+
+    try {
+      const result: CreateContentIdeaJobResult = await createContentIdeaJobAction({
+        transcriptionId: job.id,
+        jobType: jobType,
+      });
+
+      if (result.success && result.jobId) {
+        setContentIdeaState({
+          isLoading: false,
+          error: null,
+          successMessage: `Content idea job successfully started! (ID: ${result.jobId})`,
+          newJobId: result.jobId,
+        });
+        // Optional: refetch the main transcription job if content idea status might affect it (unlikely here)
+        // Optional: router.push(`/content-ideas/${result.jobId}`); // Or offer a link
+      } else {
+        setContentIdeaState({
+          isLoading: false,
+          error: result.errorMessage || result.error || "Failed to start content idea job.",
+          successMessage: null,
+          newJobId: null,
+        });
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
+      logger.error('[JobDetailPage] Error calling createContentIdeaJobAction:', err);
+      setContentIdeaState({
+        isLoading: false,
+        error: errorMessage,
+        successMessage: null,
+        newJobId: null,
+      });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="container mx-auto py-8 px-4 flex justify-center items-center h-[calc(100vh-200px)]">
@@ -252,6 +329,7 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
   const videoId = getYoutubeVideoId(job.videoUrl);
   const createdAtDate = job.createdAt;
   const updatedAtDate = job.updatedAt;
+  const isYouTubeVideo = getVideoPlatform(job.videoUrl) === 'youtube'; // NEW: Check if YouTube video
 
   return (
     <div className="container mx-auto py-8 px-4">
@@ -478,6 +556,65 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
               Download Summary
             </Button>
           </CardFooter>
+        </Card>
+      )}
+
+      {/* NEW: Content Ideas Card - Shown only for completed jobs */}
+      {job.status === "completed" && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle className="flex items-center">
+              <Lightbulb className="mr-2 h-5 w-5" /> Content Ideas
+            </CardTitle>
+            <CardDescription>
+              Generate new content ideas based on this transcription.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {contentIdeaState.newJobId ? (
+              <div className="space-y-3">
+                <p className="text-green-600 dark:text-green-500">{contentIdeaState.successMessage}</p>
+                <Button asChild>
+                  <Link href={`/content-ideas/${contentIdeaState.newJobId}`}>
+                    View Content Idea Job
+                    <ExternalLink className="ml-2 h-4 w-4" />
+                  </Link>
+                </Button>
+              </div>
+            ) : (
+              <>
+                {isYouTubeVideo ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button disabled={contentIdeaState.isLoading}>
+                        {contentIdeaState.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Generate Content Ideas
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[0])} disabled={contentIdeaState.isLoading}>
+                        Normal Analysis (from transcript)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[1])} disabled={contentIdeaState.isLoading}>
+                        Comment Analysis (from YouTube comments)
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <Button 
+                    onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[0])} // Explicitly 'normal'
+                    disabled={contentIdeaState.isLoading}
+                  >
+                    {contentIdeaState.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} 
+                    Generate Ideas (Normal Analysis)
+                  </Button>
+                )}
+              </>
+            )}
+            {contentIdeaState.error && (
+              <p className="text-destructive mt-3">Error: {contentIdeaState.error}</p>
+            )}
+          </CardContent>
         </Card>
       )}
 
