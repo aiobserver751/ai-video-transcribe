@@ -43,6 +43,11 @@ ENV REDIS_PASSWORD="dummy-password"
 ENV GOOGLE_CLIENT_ID="dummy-google-client-id"
 ENV GOOGLE_CLIENT_SECRET="dummy-google-client-secret"
 ENV NEXTAUTH_URL="http://localhost:3000"
+ENV S3_ENDPOINT_URL="https://dummy-endpoint.com"
+ENV S3_ACCESS_KEY="dummy-access-key"
+ENV S3_SECRET_KEY="dummy-secret-key"
+ENV S3_BUCKET_NAME="dummy-bucket"
+ENV S3_REGION="us-east-1"
 
 RUN npm run build
 
