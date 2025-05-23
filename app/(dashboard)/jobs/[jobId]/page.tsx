@@ -35,6 +35,7 @@ import { // NEW IMPORTS for DropdownMenu
 interface TranscriptionJob extends GlobalTranscriptionJobType {
   basicSummary?: string | null;
   extendedSummary?: string | null;
+  youtubeCommentCount?: number | null;
 }
 
 // NEW: State for content idea generation process
@@ -89,7 +90,7 @@ function getSubtitleFormatFromUrl(fileUrl: string | null | undefined): string | 
 
 // Type for the raw API response before date conversion
 // Ensure this matches the fields actually returned by your /api/jobs/[jobId] endpoint
-type RawApiJobResponse = Omit<TranscriptionJob, 'createdAt' | 'updatedAt' | 'srtFileText' | 'vttFileText'> & {
+type RawApiJobResponse = Omit<TranscriptionJob, 'createdAt' | 'updatedAt' | 'srtFileText' | 'vttFileText' | 'youtubeCommentCount'> & {
   createdAt: string;
   updatedAt: string;
   srt_file_text?: string | null; // Assuming API might still send these as snake_case
@@ -98,6 +99,7 @@ type RawApiJobResponse = Omit<TranscriptionJob, 'createdAt' | 'updatedAt' | 'srt
   // and the /api/jobs/[jobId] route currently passes it through directly.
   basicSummary?: string | null; 
   extendedSummary?: string | null;
+  youtubeCommentCount?: number | null;
 };
 
 // Function to fetch a specific job
@@ -123,6 +125,7 @@ const fetchJobDetail = async (jobId: string): Promise<TranscriptionJob | null> =
       // USE CAMEL CASE DIRECTLY as per RawApiJobResponse expectation
       basicSummary: apiData.basicSummary ?? null,
       extendedSummary: apiData.extendedSummary ?? null,
+      youtubeCommentCount: apiData.youtubeCommentCount ?? null,
       userId: apiData.userId ?? null,
       transcriptionFileUrl: apiData.transcriptionFileUrl ?? null,
       srtFileUrl: apiData.srtFileUrl ?? null,
@@ -513,6 +516,12 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
                  <h3 className="text-sm font-medium mb-1">Origin:</h3>
                  <p className="capitalize text-sm text-muted-foreground">{job.origin?.toLowerCase() ?? 'Unknown'}</p>
               </div>
+              {isYouTubeVideo && job.youtubeCommentCount !== null && typeof job.youtubeCommentCount === 'number' && (
+                <div>
+                  <h3 className="text-sm font-medium mb-1">YouTube Comment Count:</h3>
+                  <p className="text-sm text-muted-foreground">{job.youtubeCommentCount.toLocaleString()}</p>
+                </div>
+              )}
               {job.video_length_minutes_actual !== null && (
                   <div>
                       <h3 className="text-sm font-medium mb-1">Video Length (minutes):</h3>

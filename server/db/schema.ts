@@ -159,6 +159,9 @@ export const transcriptionJobs = pgTable('transcription_jobs', {
   basicSummary: text('basic_summary'),
   extendedSummary: text('extended_summary'),
 
+  // NEW FIELD for storing YouTube comment count
+  youtubeCommentCount: integer('youtube_comment_count'), // Nullable by default
+
   createdAt: timestamp('created_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   // NEW Fields for credit system

@@ -382,7 +382,8 @@ export function startTranscriptionWorker(concurrency = 5) {
         logger.info(`[${jobId}] Fetching initial video metadata/duration for URL: ${url}`);
         await job.updateProgress({ percentage: 5, stage: 'metadata', message: 'Fetching video information' });
         
-        // const isYouTube = platform === 'youtube'; // platform variable is already available
+        let fetchedCommentCount: number | null = null; // Initialize for potential use by both paths
+        let updatePayloadForDB: { video_length_minutes_actual?: number; youtubeCommentCount?: number | null; updatedAt?: Date } = {};
 
         if (quality === 'caption_first') { // platform is already confirmed to be 'youtube' due to STAGE 0
           try {
@@ -396,6 +397,7 @@ export function startTranscriptionWorker(concurrency = 5) {
               else if (parts.length === 1) { durationInSeconds = parts[0]; }
               if (durationInSeconds > 0) {
                 videoLengthMinutesActual = Math.max(1, Math.ceil(durationInSeconds / 60));
+                updatePayloadForDB.video_length_minutes_actual = videoLengthMinutesActual;
                 logger.info(`[${jobId}] YouTube (caption-first) initial length: ${videoLengthMinutesActual} min.`);
               } else { logger.warn(`[${jobId}] Invalid duration string (${durationString}) for YouTube (caption-first).`); }
             } else { logger.warn(`[${jobId}] Could not extract duration string for YouTube (caption-first), was: '${durationString}'.`);}
@@ -403,15 +405,33 @@ export function startTranscriptionWorker(concurrency = 5) {
             const msg = durationError instanceof Error ? durationError.message : String(durationError);
             logger.warn(`[${jobId}] Failed to get initial duration for YouTube (caption-first): ${msg}. Fixed cost applies anyway.`);
           }
-        } else if (quality === 'standard' || quality === 'premium') {
-          // Attempt to get duration from metadata, but don't fail if not found.
+          // --- NEW: Attempt to get comment_count for caption_first as well ---
           try {
-            const metadataOutput = await execAsync(`yt-dlp -j --no-warnings "${url}"`); // No --skip-download needed as -j implies it.
+            const metadataOutputCf = await execAsync(`yt-dlp -j --no-warnings "${url}"`);
+            const metadataCf = JSON.parse(metadataOutputCf.stdout);
+            if (metadataCf && typeof metadataCf.comment_count === 'number') {
+              fetchedCommentCount = metadataCf.comment_count;
+              updatePayloadForDB.youtubeCommentCount = fetchedCommentCount;
+              logger.info(`[${jobId}] Extracted comment_count for caption_first: ${fetchedCommentCount}`);
+            } else {
+              logger.warn(`[${jobId}] Could not extract comment_count for caption_first or it was not a number. metadata.comment_count: ${metadataCf?.comment_count}`);
+            }
+          } catch (cfMetaError: unknown) {
+            const msg = cfMetaError instanceof Error ? cfMetaError.message : String(cfMetaError);
+            logger.warn(`[${jobId}] Failed to get full metadata (for comment_count) for caption_first: ${msg}. Proceeding without it.`);
+          }
+          // --- END NEW for caption_first ---
+        } else if (quality === 'standard' || quality === 'premium') {
+          // Attempt to get duration and comment_count from metadata for standard/premium
+          try {
+            const metadataOutput = await execAsync(`yt-dlp -j --no-warnings "${url}"`);
             const metadata = JSON.parse(metadataOutput.stdout);
+
             if (metadata && metadata.duration) {
               const durationInSeconds = Number(metadata.duration);
               if (!isNaN(durationInSeconds) && durationInSeconds > 0) {
                 videoLengthMinutesActual = Math.max(1, Math.ceil(durationInSeconds / 60));
+                updatePayloadForDB.video_length_minutes_actual = videoLengthMinutesActual;
                 logger.info(`[${jobId}] Initial video length from metadata: ${videoLengthMinutesActual} minutes (Platform: ${platform}).`);
               } else { 
                 logger.warn(`[${jobId}] Invalid duration (${metadata.duration}) from metadata (Platform: ${platform}). Will rely on ffprobe after download.`); 
@@ -419,27 +439,39 @@ export function startTranscriptionWorker(concurrency = 5) {
             } else {
               logger.warn(`[${jobId}] Could not extract duration from 'yt-dlp -j' metadata for URL: ${url} (Platform: ${platform}). Will rely on ffprobe after download.`);
             }
+
+            if (metadata && typeof metadata.comment_count === 'number') {
+              fetchedCommentCount = metadata.comment_count;
+              updatePayloadForDB.youtubeCommentCount = fetchedCommentCount;
+              logger.info(`[${jobId}] Extracted comment_count from metadata: ${fetchedCommentCount}`);
+            } else {
+              logger.warn(`[${jobId}] Could not extract comment_count from 'yt-dlp -j' metadata or it was not a number. metadata.comment_count: ${metadata?.comment_count}`);
+            }
           } catch (metaError: unknown) {
             const msg = metaError instanceof Error ? metaError.message : String(metaError);
             logger.warn(`[${jobId}] Failed to get video metadata via 'yt-dlp -j' (Platform: ${platform}): ${msg}. Will rely on ffprobe after download.`);
           }
         }
         
-        // Update DB with initial video length if found for caption_first, or if found for standard/premium.
-        // For standard/premium, if videoLengthMinutesActual is still null here, it means initial metadata fetch failed,
-        // and it will be updated post-ffprobe.
-        if (videoLengthMinutesActual !== null) { // If we have a duration from any source
+        // Consolidated DB update for initial metadata (duration and/or comment count)
+        if (Object.keys(updatePayloadForDB).length > 0) {
+          updatePayloadForDB.updatedAt = new Date();
+          await db.update(transcriptionJobs)
+            .set(updatePayloadForDB)
+            .where(eq(transcriptionJobs.id, jobId));
+          logger.info(`[${jobId}] DB updated with initial metadata: ${JSON.stringify(updatePayloadForDB)}`);
+        } else if (quality === 'caption_first' && videoLengthMinutesActual === null) {
+            // Special case for caption_first: if duration couldn't be determined at all, log it / set to 0 for credits
+            // This is if both duration_string and the subsequent -j attempt (if it were to set duration) failed.
+            // However, videoLengthMinutesActual is primarily for credit calc for standard/premium.
+            // For caption_first, credits are fixed. So this is more for record keeping if needed.
+            // The existing logic for caption_first credits doesn't rely on videoLengthMinutesActual.
+            // We can still store 0 if we want to signify 'N/A' or 'fetch_failed' for duration.
             await db.update(transcriptionJobs)
-              .set({ video_length_minutes_actual: videoLengthMinutesActual, updatedAt: new Date() })
+              .set({ video_length_minutes_actual: 0, updatedAt: new Date() })
               .where(eq(transcriptionJobs.id, jobId));
-            logger.info(`[${jobId}] DB updated with initial video_length_minutes_actual: ${videoLengthMinutesActual}`);
-        } else if (quality === 'caption_first') { // Only set to 0 if caption_first AND duration was NOT found
-             await db.update(transcriptionJobs)
-              .set({ video_length_minutes_actual: 0, updatedAt: new Date() }) 
-              .where(eq(transcriptionJobs.id, jobId));
-            logger.info(`[${jobId}] YouTube (caption-first) video length set to 0 (N/A) in DB as initial fetch failed.`);
+            logger.info(`[${jobId}] YouTube (caption_first) video_length_minutes_actual set to 0 in DB as initial fetch failed.`);
         }
-        // If standard/premium and videoLengthMinutesActual is null, DB is not updated with duration yet.
 
         // STAGE 2: Credit Calculation & Deduction (Logic moved for standard/premium)
         if (quality === 'caption_first') { // Must be YouTube (platform check in STAGE 0)

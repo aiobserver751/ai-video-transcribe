@@ -59,6 +59,28 @@ export async function GET(request: NextRequest, context: RouteContext) {
         eq(transcriptionJobs.id, jobId),
         eq(transcriptionJobs.userId, userId)
       ),
+      columns: {
+        id: true,
+        userId: true,
+        videoUrl: true,
+        quality: true,
+        status: true,
+        origin: true,
+        statusMessage: true,
+        transcriptionFileUrl: true,
+        srtFileUrl: true,
+        vttFileUrl: true,
+        transcriptionText: true, 
+        srt_file_text: true, 
+        vtt_file_text: true,
+        basicSummary: true,
+        extendedSummary: true,
+        youtubeCommentCount: true,
+        createdAt: true,
+        updatedAt: true,
+        video_length_minutes_actual: true,
+        credits_charged: true,
+      }
     });
 
     // --- Response ---

@@ -39,7 +39,8 @@ export class ContentIdeasService {
 
   private async calculateCreditCostForContentIdea(
     jobType: typeof contentIdeaJobTypeEnum.enumValues[number],
-    videoUrl: string
+    videoUrl: string,
+    transcriptionId: string
   ): Promise<CreditCalculationResult> {
     const creditConfig = await getCreditConfig(); // Fetch current credit costs
 
@@ -56,41 +57,55 @@ export class ContentIdeasService {
           minCommentsForAnalysis = parsedMin;
         } else {
           logger.warn(`[ContentIdeasService] Invalid MIN_YOUTUBE_COMMENTS_FOR_ANALYSIS value: "${minCommentsEnv}". Defaulting to 25.`);
-          // minCommentsForAnalysis remains 25 as per initialization
         }
       }
 
-      // Use the new fetchYouTubeComments utility
-      const maxCommentsEnv = process.env.MAX_YOUTUBE_COMMENTS_TO_FETCH;
-      const commentFetchResult = await fetchYouTubeComments(videoUrl, maxCommentsEnv);
+      let commentCount: number | null = null;
+      let fetchedLive = false; // Flag to know if we fetched live
 
-      if (commentFetchResult.error) {
-        logger.error(`[ContentIdeasService] Error fetching comments for ${videoUrl}: ${commentFetchResult.error}`);
-        // If fetching comments fails, we can't proceed with credit calculation for comment-based jobs.
-        return { error: `Failed to fetch comments: ${commentFetchResult.error}`, cost: 0 };
+      const parentTranscriptionJob = await this.db.query.transcriptionJobs.findFirst({
+        where: eq(transcriptionJobs.id, transcriptionId),
+        columns: { youtubeCommentCount: true }
+      });
+
+      if (parentTranscriptionJob && typeof parentTranscriptionJob.youtubeCommentCount === 'number') {
+        commentCount = parentTranscriptionJob.youtubeCommentCount;
+        logger.info(`[ContentIdeasService] Using stored youtubeCommentCount: ${commentCount} for video ${videoUrl} (transcriptionId: ${transcriptionId})`);
+      } else {
+        logger.info(`[ContentIdeasService] Stored youtubeCommentCount not available or invalid for ${videoUrl} (transcriptionId: ${transcriptionId}). Fetching live.`);
+        const maxCommentsEnv = process.env.MAX_YOUTUBE_COMMENTS_TO_FETCH;
+        const commentFetchResult = await fetchYouTubeComments(videoUrl, maxCommentsEnv);
+        fetchedLive = true;
+
+        if (commentFetchResult.error) {
+          logger.error(`[ContentIdeasService] Error fetching comments for ${videoUrl}: ${commentFetchResult.error}`);
+          return { error: `Failed to fetch comments: ${commentFetchResult.error}`, cost: 0 };
+        }
+        commentCount = commentFetchResult.commentCount;
+        logger.info(`[ContentIdeasService] Live fetch: Video ${videoUrl} has ${commentCount} total comments.`);
       }
 
-      const commentCount = commentFetchResult.commentCount; // This is the *total* count reported by yt-dlp before our internal truncation
-      logger.info(`[ContentIdeasService] Video ${videoUrl} has ${commentCount} total comments reported by yt-dlp.`);
+      if (commentCount === null) { 
+          logger.error(`[ContentIdeasService] Comment count is null after attempting to fetch/retrieve for ${videoUrl}`);
+          return { error: "Failed to determine comment count.", cost: 0 };
+      }
+      
+      logger.info(`[ContentIdeasService] Calculating credit for ${videoUrl} based on ${commentCount} comments (fetched live: ${fetchedLive}).`);
 
       if (commentCount < minCommentsForAnalysis) {
-        return { error: `Not enough comments for analysis. A minimum of ${minCommentsForAnalysis} comments is required.`, cost: 0 };
+        return { error: `Not enough comments for analysis. A minimum of ${minCommentsForAnalysis} comments is required, found ${commentCount}.`, cost: 0 };
       }
 
       let cost = 0;
-      // Match comment count to tiers defined in .env
       if (commentCount >= 25 && commentCount <= 100) cost = creditConfig.CONTENT_IDEA_COMMENT_SMALL_CREDIT_COST;
       else if (commentCount > 100 && commentCount <= 500) cost = creditConfig.CONTENT_IDEA_COMMENT_MEDIUM_CREDIT_COST;
       else if (commentCount > 500 && commentCount <= 1000) cost = creditConfig.CONTENT_IDEA_COMMENT_LARGE_CREDIT_COST;
       else if (commentCount > 1000 && commentCount <= 2000) cost = creditConfig.CONTENT_IDEA_COMMENT_XLARGE_CREDIT_COST; 
-      else if (commentCount > 2000) { // Exceeds max fetchable/analyzable
-        // Option 1: Cap at XLARGE cost if we process up to 2000
+      else if (commentCount > 2000) {
         cost = creditConfig.CONTENT_IDEA_COMMENT_XLARGE_CREDIT_COST;
         logger.warn(`[ContentIdeasService] Comment count ${commentCount} exceeds 2000. Capping cost at XLARGE tier for video ${videoUrl}.`);
-        // Option 2: Or return an error if we don't want to process >2000 comments
-        // return { error: "Video has too many comments (max 2000).", cost: 0 }; 
       } else {
-        return { error: "Could not determine comment analysis credit tier.", cost: 0 };
+        return { error: "Could not determine comment analysis credit tier based on comment count.", cost: 0 };
       }
       return { cost, videoLengthMinutes: 0, chargeableUnits: commentCount, unitType: 'comments' };
     }
@@ -100,12 +115,12 @@ export class ContentIdeasService {
   async createJob(input: CreateJobInput): Promise<ServiceResult> {
     logger.info(`[ContentIdeasService] User ${this.userId} attempting to create ${input.jobType} content idea job for transcription ${input.transcriptionId}`);
 
-    // 1. Validate parent transcription job
     const parentJob = await this.db.query.transcriptionJobs.findFirst({
       where: and(
         eq(transcriptionJobs.id, input.transcriptionId),
-        eq(transcriptionJobs.userId, this.userId) // Ensure user owns the transcription
-      )
+        eq(transcriptionJobs.userId, this.userId)
+      ),
+      columns: { videoUrl: true, status: true, id: true }
     });
 
     if (!parentJob) {
@@ -127,7 +142,7 @@ export class ContentIdeasService {
     }
 
     // 2. Calculate Credit Cost
-    const creditCalculation = await this.calculateCreditCostForContentIdea(input.jobType, parentJob.videoUrl);
+    const creditCalculation = await this.calculateCreditCostForContentIdea(input.jobType, parentJob.videoUrl, input.transcriptionId);
     if (creditCalculation.error || typeof creditCalculation.cost !== 'number' || creditCalculation.cost < 0) {
       logger.error(`[ContentIdeasService] Credit calculation error for user ${this.userId}, jobType ${input.jobType}: ${creditCalculation.error}`);
       return { success: false, error: "Credit calculation failed.", errorMessage: creditCalculation.error || "Could not determine the credit cost for this operation." };
