@@ -5,6 +5,9 @@ FROM node:20.18.0-alpine AS base
 RUN apk add --no-cache \
     python3 \
     py3-pip \
+    python3-dev \
+    py3-setuptools \
+    py3-wheel \
     make \
     g++ \
     gcc \
@@ -13,10 +16,13 @@ RUN apk add --no-cache \
     curl \
     wget \
     git \
-    ffmpeg
+    ffmpeg \
+    openssl-dev \
+    libffi-dev
 
-# Install yt-dlp
-RUN pip3 install yt-dlp
+# Upgrade pip and install yt-dlp
+RUN pip3 install --upgrade pip setuptools wheel
+RUN pip3 install --no-cache-dir yt-dlp
 
 # Verify installations
 RUN ffmpeg -version && ffprobe -version && yt-dlp --version
@@ -44,8 +50,9 @@ RUN apk add --no-cache \
     py3-pip \
     ffmpeg
 
-# Install yt-dlp in production image
-RUN pip3 install yt-dlp
+# Install yt-dlp in production image with minimal dependencies
+RUN pip3 install --upgrade pip
+RUN pip3 install --no-cache-dir yt-dlp
 
 ENV NODE_ENV production
 
