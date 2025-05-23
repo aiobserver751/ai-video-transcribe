@@ -35,20 +35,86 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Set dummy environment variables for build process
+# OpenAI/AI Configuration
+ENV OPENAI_API_KEY="sk-dummy-openai-api-key-for-build"
+ENV OPENAI_MODEL_NAME="gpt-4"
+ENV GROQ_API_KEY="gsk_dummy-groq-api-key-for-build"
+
+# App Configuration
+ENV NEXT_PUBLIC_APP_URL="http://localhost:3000"
+ENV NEXT_PUBLIC_MAX_FILE_SIZE="104857600"
+
+# Database
 ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
-ENV NEXTAUTH_SECRET="dummy-secret-for-build"
+
+# Redis/Queue Configuration
 ENV REDIS_HOST="localhost"
 ENV REDIS_PORT="6379"
 ENV REDIS_PASSWORD="dummy-password"
+ENV ENABLE_QUEUE_WORKERS="false"
+ENV TRANSCRIPTION_CONCURRENCY="2"
+ENV CONTENT_IDEAS_CONCURRENCY="1"
+
+# Local Storage
+ENV LOCAL_STORAGE_PATH="/tmp/uploads"
+
+# Authentication
 ENV GOOGLE_CLIENT_ID="dummy-google-client-id"
 ENV GOOGLE_CLIENT_SECRET="dummy-google-client-secret"
+ENV AUTH_SECRET="dummy-secret-for-build"
 ENV NEXTAUTH_URL="http://localhost:3000"
+
+# Stripe Configuration
+ENV STRIPE_SECRET_KEY="sk_test_dummy_key_for_build"
+ENV NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY="pk_test_dummy_publishable_key"
+ENV STRIPE_WEBHOOK_SECRET="whsec_dummy_webhook_secret"
+ENV NEXT_PUBLIC_STRIPE_PRICE_ID_STARTER="price_dummy_starter"
+ENV NEXT_PUBLIC_STRIPE_PRICE_ID_PRO="price_dummy_pro"
+
+# Credits System
+ENV CREDITS_FREE="100"
+ENV CREDITS_STARTER="1000"
+ENV CREDITS_PRO="5000"
+ENV FREE_TIER_INITIAL_CREDITS="100"
+ENV FREE_TIER_REFRESH_CREDITS="50"
+ENV FREE_TIER_REFRESH_INTERVAL_DAYS="30"
+ENV FREE_TIER_MAX_CREDITS="200"
+ENV STARTER_TIER_MONTHLY_CREDITS="1000"
+ENV PRO_TIER_MONTHLY_CREDITS="5000"
+
+# Credit Costs
+ENV CREDITS_CAPTION_FIRST_FIXED="10"
+ENV CREDITS_PER_10_MIN_STANDARD="5"
+ENV CREDITS_PER_10_MIN_PREMIUM="10"
+ENV CREDITS_BASIC_SUMMARY_FIXED="15"
+ENV CREDITS_EXTENDED_SUMMARY_FIXED="25"
+
+# Content Ideas Credit Costs
+ENV CONTENT_IDEA_NORMAL_CREDIT_COST="20"
+ENV CONTENT_IDEA_COMMENT_SMALL_CREDIT_COST="25"
+ENV CONTENT_IDEA_COMMENT_MEDIUM_CREDIT_COST="35"
+ENV CONTENT_IDEA_COMMENT_LARGE_CREDIT_COST="50"
+ENV CONTENT_IDEA_COMMENT_XLARGE_CREDIT_COST="75"
+
+# YouTube Configuration
+ENV MAX_YOUTUBE_COMMENTS_TO_FETCH="500"
+ENV MIN_YOUTUBE_COMMENTS_FOR_ANALYSIS="10"
+
+# Prompt Templates
+ENV PROMPT_TEMPLATE_CONTENT_IDEAS_NORMAL_PATH="/prompts/content-ideas-normal.txt"
+ENV PROMPT_TEMPLATE_CONTENT_IDEAS_YT_COMMENTS_PATH="/prompts/content-ideas-yt-comments.txt"
+ENV PROMPT_TEMPLATE_BASIC_SUMMARY_PATH="/prompts/basic-summary.txt"
+ENV PROMPT_TEMPLATE_EXTENDED_SUMMARY_PATH="/prompts/extended-summary.txt"
+
+# Local/Cron
+ENV LOCAL_CRON_SCRIPT_SECRET="dummy-cron-secret"
+
+# S3 Configuration
 ENV S3_ENDPOINT_URL="https://dummy-endpoint.com"
 ENV S3_ACCESS_KEY="dummy-access-key"
 ENV S3_SECRET_KEY="dummy-secret-key"
 ENV S3_BUCKET_NAME="dummy-bucket"
 ENV S3_REGION="us-east-1"
-ENV STRIPE_SECRET_KEY="sk_test_dummy_key_for_build"
 
 # Skip static generation during build to avoid database connections
 ENV SKIP_STATIC_GENERATION="true"
