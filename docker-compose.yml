@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    # Environment variables will be set in DigitalOcean App Platform GUI
+    # No need for env_file when deploying to cloud platforms
+    restart: unless-stopped
+    volumes:
+      # Mount tmp directory for file processing
+      - ./tmp:/app/tmp
+    # Uncomment if you need to persist data
+    # volumes:
+    #   - app-data:/app/data
+
+# Uncomment if you need persistent volumes
+# volumes:
+#   app-data: 
