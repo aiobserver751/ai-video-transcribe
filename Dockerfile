@@ -49,6 +49,11 @@ ENV S3_SECRET_KEY="dummy-secret-key"
 ENV S3_BUCKET_NAME="dummy-bucket"
 ENV S3_REGION="us-east-1"
 
+# Skip static generation during build to avoid database connections
+ENV SKIP_STATIC_GENERATION="true"
+ENV NEXT_TELEMETRY_DISABLED="1"
+ENV DISABLE_STATIC_GENERATION="true"
+
 RUN npm run build
 
 # Production image - create a clean runtime image
