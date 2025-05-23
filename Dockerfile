@@ -37,6 +37,9 @@ COPY . .
 # Set dummy environment variables for build process
 ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
 ENV NEXTAUTH_SECRET="dummy-secret-for-build"
+ENV REDIS_HOST="localhost"
+ENV REDIS_PORT="6379"
+ENV REDIS_PASSWORD="dummy-password"
 
 RUN npm run build
 
