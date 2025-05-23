@@ -242,21 +242,35 @@ export async function generateNormalContentIdeas(
     throw error; 
   }
 
-  let populatedPrompt = promptTemplate.replace('{{transcript_text}}', transcriptText);
+  // Log the raw prompt template AS LOADED
+  logger.debug(`[OpenAIService] Raw promptTemplate loaded for ${operationType} (first 300 chars): ${promptTemplate.substring(0,300)}`);
+  logger.debug(`[OpenAIService] indexOf '{{transcript_text}}' in raw template: ${promptTemplate.indexOf('{{transcript_text}}')}`);
+  logger.debug(`[OpenAIService] indexOf '{{summary_text}}' in raw template: ${promptTemplate.indexOf('{{summary_text}}')}`);
+
+  // Log the transcript text right before attempting to inject it
+  logger.debug(`[OpenAIService] Transcript text to be injected (first 100 chars): ${transcriptText.substring(0,100)}`);
+
+  // Use a global regex for replacement to be more robust
+  // const transcriptRegex = new RegExp('{{transcript_text}}', 'g'); // Remove this
+  // Step 1: Replace transcript_text
+  const promptAfterTranscriptInjection = promptTemplate.replace('{{transcript_text}}', transcriptText); // Use direct string replacement
   
-  // Handle simplified {{summary_text}} placeholder
+  logger.debug(`[OpenAIService] promptAfterTranscriptInjection (first 300 chars): ${promptAfterTranscriptInjection.substring(0,300)}`);
+
+  // Step 2: Replace summary_text using the result from Step 1
+  let populatedPrompt = promptAfterTranscriptInjection; // Initialize final prompt with the result of transcript injection
+  // const summaryRegex = new RegExp('{{summary_text}}', 'g'); // Remove this
+
   if (optionalSummaryText && optionalSummaryText.trim()) {
-    populatedPrompt = populatedPrompt.replace('{{summary_text}}', optionalSummaryText);
+    populatedPrompt = populatedPrompt.replace('{{summary_text}}', optionalSummaryText); // Use direct string replacement
+    logger.debug('[OpenAIService] Injected optionalSummaryText into promptAfterTranscriptInjection.');
   } else {
-    // If no summary, replace the placeholder with an empty string
-    // This handles the case where the template directly uses {{summary_text}}
-    // without an {{#if}} block, like "SUMMARY:\n{{summary_text}}"
-    populatedPrompt = populatedPrompt.replace('{{summary_text}}', '');
-    // Optionally, if you want to remove the whole line "SUMMARY:\n" when summary is empty:
-    // populatedPrompt = populatedPrompt.replace(/^SUMMARY:\n{{summary_text}}\n?/m, '');
-    // The above line uses regex: ^ for start of line, \n? for optional newline, m for multiline.
-    // For now, just replacing {{summary_text}} with empty string is safer and simpler.
+    populatedPrompt = populatedPrompt.replace('{{summary_text}}', ''); // Use direct string replacement on the already transcript-injected version
+    logger.debug('[OpenAIService] Replaced {{summary_text}} with empty string in promptAfterTranscriptInjection.');
   }
+
+  logger.debug(`[OpenAIService] Final populated prompt for ${operationType} (first 1000 chars):
+${populatedPrompt.substring(0, 1000)}`);
 
   const openai = new OpenAI({ apiKey });
 

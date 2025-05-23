@@ -82,9 +82,8 @@ export function startContentIdeasWorker(concurrency = 3) { // Adjust concurrency
         let resultJson: object | undefined | null = null;
 
         if (jobType === 'normal') {
-          logger.info(`[${contentIdeaJobId}] Performing Normal Analysis...`);
+          logger.info(`[${contentIdeaJobId}] Starting 'normal' content idea processing for transcription ID: ${transcriptionId}. Attempting to fetch transcription data.`);
           
-          // 1. Fetch transcription text (and summary if applicable)
           const transcriptionRecord = await db.query.transcriptionJobs.findFirst({
             where: eq(transcriptionJobsSchema.id, transcriptionId),
             columns: {
@@ -94,28 +93,28 @@ export function startContentIdeasWorker(concurrency = 3) { // Adjust concurrency
             }
           });
 
-          if (!transcriptionRecord || !transcriptionRecord.transcriptionText) {
+          if (!transcriptionRecord) {
+            logger.error(`[${contentIdeaJobId}] CRITICAL: Transcription record not found in DB for ID: ${transcriptionId}. Cannot proceed.`);
+            throw new Error(`Transcription record not found for ID: ${transcriptionId}`);
+          }
+          logger.info(`[${contentIdeaJobId}] Fetched transcription record from DB. Checking for transcriptionText presence.`);
+
+          if (!transcriptionRecord.transcriptionText) {
+            logger.error(`[${contentIdeaJobId}] CRITICAL: Transcription text is missing in fetched DB record for ID: ${transcriptionId}. Text is null or empty.`);
             throw new Error(`Transcription text not found for transcription ID: ${transcriptionId}`);
           }
+          logger.info(`[${contentIdeaJobId}] Transcription text found. Length: ${transcriptionRecord.transcriptionText.length}.`);
           
           const inputText = transcriptionRecord.transcriptionText;
-          const summaryContext = transcriptionRecord.extendedSummary || transcriptionRecord.basicSummary || null;
+          const summaryToUse = transcriptionRecord.extendedSummary || transcriptionRecord.basicSummary || null;
 
-          // Debug logging
-          logger.debug(`[${contentIdeaJobId}] Data for OpenAI - inputText length: ${inputText?.length ?? 0}`);
-          if (summaryContext) {
-            logger.debug(`[${contentIdeaJobId}] Data for OpenAI - summaryContext length: ${summaryContext.length}`);
-            logger.debug(`[${contentIdeaJobId}] Data for OpenAI - summaryContext (first 100 chars): ${summaryContext.substring(0, 100)}`);
-          } else {
-            logger.debug(`[${contentIdeaJobId}] Data for OpenAI - summaryContext: null or empty`);
-          }
-          logger.debug(`[${contentIdeaJobId}] Data for OpenAI - inputText (first 100 chars): ${inputText.substring(0, 100)}`);
+          logger.debug(`[${contentIdeaJobId}] Prepared inputText (len: ${inputText.length}, first 100 chars): ${inputText.substring(0,100)}`);
+          logger.debug(`[${contentIdeaJobId}] Prepared summaryToUse (len: ${summaryToUse ? summaryToUse.length : 'N/A'}, first 100 chars): ${summaryToUse ? summaryToUse.substring(0,100) : 'null or empty'}`);
+          
+          logger.info(`[${contentIdeaJobId}] About to call openaiService.generateNormalContentIdeas.`);
+          const openAIResults = await generateNormalContentIdeas(inputText, summaryToUse);
+          logger.info(`[${contentIdeaJobId}] Returned from openaiService.generateNormalContentIdeas. Result text present: ${!!openAIResults.resultTxt}, Result JSON present: ${!!openAIResults.resultJson}`);
 
-          await job.updateProgress({ percentage: 20, stage: 'data_fetched', message: 'Transcription data fetched' });
-
-          // 2. Call LLM via OpenAIService
-          logger.info(`[${contentIdeaJobId}] Calling OpenAI service for normal content ideas.`);
-          const openAIResults = await generateNormalContentIdeas(inputText, summaryContext);
           resultTxt = openAIResults.resultTxt;
           resultJson = openAIResults.resultJson;
 

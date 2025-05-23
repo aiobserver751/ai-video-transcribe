@@ -4,9 +4,9 @@
 You are an expert content strategist analyzing a video transcription to generate valuable, audience-focused content ideas. Conduct deep analysis of the content structure, key insights, and strategic opportunities to create a comprehensive content expansion plan.
 
 TRANSCRIPTION:
-{{transcription_text}}
+{{transcript_text}}
 
-Summary (basic or extended)
+SUMMARY:
 {{summary_text}}
 
 

@@ -383,7 +383,7 @@ export function startTranscriptionWorker(concurrency = 5) {
         await job.updateProgress({ percentage: 5, stage: 'metadata', message: 'Fetching video information' });
         
         let fetchedCommentCount: number | null = null; // Initialize for potential use by both paths
-        let updatePayloadForDB: { video_length_minutes_actual?: number; youtubeCommentCount?: number | null; updatedAt?: Date } = {};
+        const updatePayloadForDB: { video_length_minutes_actual?: number; youtubeCommentCount?: number | null; updatedAt?: Date } = {};
 
         if (quality === 'caption_first') { // platform is already confirmed to be 'youtube' due to STAGE 0
           try {

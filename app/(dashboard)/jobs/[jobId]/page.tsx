@@ -24,12 +24,6 @@ import { createContentIdeaJobAction, type CreateContentIdeaJobResult } from "@/a
 import Link from 'next/link'; // For linking to the new content idea job
 import { contentIdeaJobTypeEnum } from '@/server/db/schema'; // NEW IMPORT
 import { getVideoPlatform } from '@/lib/utils/urlUtils'; // NEW IMPORT
-import { // NEW IMPORTS for DropdownMenu
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
 // Extend the global type or define a local one that includes summaries
 interface TranscriptionJob extends GlobalTranscriptionJobType {
@@ -149,11 +143,12 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
   const { jobId } = params;
   const router = useRouter();
   const [isClientForDownload, setIsClientForDownload] = useState(false);
-  const [contentIdeaState, setContentIdeaState] = useState<ContentIdeaGenerationState>({
-    isLoading: false,
-    error: null,
-    successMessage: null,
-    newJobId: null,
+  const [contentIdeaStates, setContentIdeaStates] = useState<{
+    normal: ContentIdeaGenerationState;
+    comments: ContentIdeaGenerationState;
+  }>({
+    normal: { isLoading: false, error: null, successMessage: null, newJobId: null },
+    comments: { isLoading: false, error: null, successMessage: null, newJobId: null },
   });
 
   useEffect(() => {
@@ -244,24 +239,30 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
     URL.revokeObjectURL(url);
   };
 
-  // NEW: Handler for initiating content idea generation
+  // UPDATED: Handler for initiating content idea generation
   const handleGenerateContentIdeas = async (jobType: typeof contentIdeaJobTypeEnum.enumValues[number]) => {
     if (!job || job.status !== 'completed') {
-      setContentIdeaState({
-        isLoading: false,
-        error: "Content ideas can only be generated for completed transcription jobs.",
-        successMessage: null,
-        newJobId: null,
-      });
+      const errorMsg = "Content ideas can only be generated for completed transcription jobs.";
+      // Determine which state to update based on jobType
+      const stateKeyToUpdateOnError = jobType === contentIdeaJobTypeEnum.enumValues[0] ? 'normal' : 'comments';
+      setContentIdeaStates(prev => ({ 
+        ...prev, 
+        [stateKeyToUpdateOnError]: { 
+          isLoading: false, 
+          error: errorMsg, 
+          successMessage: null, // Clear success message on new error
+          newJobId: null  // Clear newJobId on new error for this type
+        } 
+      }));
       return;
     }
 
-    setContentIdeaState({
-      isLoading: true,
-      error: null,
-      successMessage: null,
-      newJobId: null,
-    });
+    const stateKey = jobType === contentIdeaJobTypeEnum.enumValues[0] ? 'normal' : 'comments';
+
+    setContentIdeaStates(prev => ({
+      ...prev,
+      [stateKey]: { isLoading: true, error: null, successMessage: null, newJobId: null }, // Reset state for this type on new generation attempt
+    }));
 
     try {
       const result: CreateContentIdeaJobResult = await createContentIdeaJobAction({
@@ -270,31 +271,38 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
       });
 
       if (result.success && result.jobId) {
-        setContentIdeaState({
-          isLoading: false,
-          error: null,
-          successMessage: `Content idea job successfully started! (ID: ${result.jobId})`,
-          newJobId: result.jobId,
-        });
-        // Optional: refetch the main transcription job if content idea status might affect it (unlikely here)
-        // Optional: router.push(`/content-ideas/${result.jobId}`); // Or offer a link
+        setContentIdeaStates(prev => ({
+          ...prev,
+          [stateKey]: {
+            isLoading: false,
+            error: null,
+            successMessage: `Content idea job (${jobType}) successfully started! (ID: ${result.jobId})`,
+            newJobId: result.jobId,
+          },
+        }));
       } else {
-        setContentIdeaState({
-          isLoading: false,
-          error: result.errorMessage || result.error || "Failed to start content idea job.",
-          successMessage: null,
-          newJobId: null,
-        });
+        setContentIdeaStates(prev => ({
+          ...prev,
+          [stateKey]: {
+            isLoading: false,
+            error: result.errorMessage || result.error || "Failed to start content idea job.",
+            successMessage: null,
+            newJobId: null,
+          },
+        }));
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "An unknown error occurred.";
       logger.error('[JobDetailPage] Error calling createContentIdeaJobAction:', err);
-      setContentIdeaState({
-        isLoading: false,
-        error: errorMessage,
-        successMessage: null,
-        newJobId: null,
-      });
+      setContentIdeaStates(prev => ({
+        ...prev,
+        [stateKey]: {
+          isLoading: false,
+          error: errorMessage,
+          successMessage: null,
+          newJobId: null,
+        },
+      }));
     }
   };
 
@@ -568,60 +576,154 @@ export default function JobDetailPage({ params }: JobDetailPageProps) {
         </Card>
       )}
 
-      {/* NEW: Content Ideas Card - Shown only for completed jobs */}
+      {/* === NEW CONTENT INSIGHTS SECTION === */}
       {job.status === "completed" && (
         <Card className="mt-6">
           <CardHeader>
             <CardTitle className="flex items-center">
-              <Lightbulb className="mr-2 h-5 w-5" /> Content Ideas
+              <Lightbulb className="mr-2 h-5 w-5 text-primary" /> Generate Content Insights
             </CardTitle>
             <CardDescription>
-              Generate new content ideas based on this transcription.
+              Explore different ways to generate new content ideas based on this transcription.
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            {contentIdeaState.newJobId ? (
-              <div className="space-y-3">
-                <p className="text-green-600 dark:text-green-500">{contentIdeaState.successMessage}</p>
-                <Button asChild>
-                  <Link href={`/content-ideas/${contentIdeaState.newJobId}`}>
-                    View Content Idea Job
-                    <ExternalLink className="ml-2 h-4 w-4" />
-                  </Link>
-                </Button>
+          <CardContent className="space-y-6">
+            {isYouTubeVideo ? (
+              // Two-column layout for YouTube videos
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* --- Normal Analysis Card (YouTube Left Column) --- */}
+                <Card className="flex flex-col">
+                  <CardHeader>
+                    <CardTitle>Transcript Analysis</CardTitle>
+                    <CardDescription>Get content ideas based on the full transcript text.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex-grow space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      This analysis delves into the core themes, keywords, and narratives present in the video&apos;s transcription. 
+                      Ideal for brainstorming blog posts, new video topics, or social media updates derived directly from the original content.
+                    </p>
+                  </CardContent>
+                  <CardFooter className="mt-auto">
+                    {contentIdeaStates.normal.newJobId ? (
+                      <Button asChild className="w-full">
+                        <Link href={`/content-ideas/${contentIdeaStates.normal.newJobId}`}>
+                          View Transcript Analysis Job <ExternalLink className="ml-2 h-4 w-4" />
+                        </Link>
+                      </Button>
+                    ) : (
+                      <Button 
+                        onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[0])}
+                        disabled={contentIdeaStates.normal.isLoading || contentIdeaStates.comments.isLoading}
+                        className="w-full"
+                      >
+                        {contentIdeaStates.normal.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} 
+                        Generate from Transcript
+                      </Button>
+                    )}
+                  </CardFooter>
+                  {/* Display errors or success messages for normal analysis */} 
+                  {(contentIdeaStates.normal.error || contentIdeaStates.normal.successMessage) && (
+                    <div className="p-4 text-sm">
+                      {contentIdeaStates.normal.error && <p className="text-destructive">Error: {contentIdeaStates.normal.error}</p>}
+                      {contentIdeaStates.normal.successMessage && !contentIdeaStates.normal.newJobId && <p className="text-green-600">{contentIdeaStates.normal.successMessage}</p>}
+                    </div>
+                  )}
+                </Card>
+
+                {/* --- Comment Analysis Card (YouTube Right Column) --- */}
+                <Card className="flex flex-col">
+                  <CardHeader>
+                    <CardTitle>YouTube Comment Analysis</CardTitle>
+                    <CardDescription>Uncover insights from audience engagement.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex-grow space-y-3">
+                    <p className="text-sm text-muted-foreground">
+                      Analyze the YouTube comments to understand audience sentiment, frequently asked questions, and suggestions. 
+                      This can spark ideas for follow-up content that directly addresses your viewers&apos; interests.
+                    </p>
+                    {job.youtubeCommentCount !== null && typeof job.youtubeCommentCount === 'number' ? (
+                      <p className="text-sm font-medium">Estimated comments to analyze: <Badge variant="secondary">{job.youtubeCommentCount.toLocaleString()}</Badge></p>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Comment count not yet available for estimation.</p>
+                    )}
+                    {/* Placeholder for credit table/tiers */}
+                    <div className="text-xs text-muted-foreground p-2 border rounded-md">
+                      <p className="font-semibold mb-1">Credit Tiers for Comment Analysis (Example):</p>
+                      <ul className="list-disc list-inside space-y-0.5">
+                        <li>0 - 100 comments: 5 credits</li>
+                        <li>101 - 500 comments: 15 credits</li>
+                        <li>501 - 2000 comments: 40 credits</li>
+                        <li>2000+ comments: Contact us</li>
+                      </ul>
+                      <p className="mt-1">Actual cost calculated when job is submitted.</p>
+                    </div>
+                  </CardContent>
+                  <CardFooter className="mt-auto">
+                    {contentIdeaStates.comments.newJobId ? (
+                      <Button asChild className="w-full">
+                        <Link href={`/content-ideas/${contentIdeaStates.comments.newJobId}`}>
+                          View Comment Analysis Job <ExternalLink className="ml-2 h-4 w-4" />
+                        </Link>
+                      </Button>
+                    ) : (
+                      <Button 
+                        onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[1])}
+                        disabled={contentIdeaStates.normal.isLoading || contentIdeaStates.comments.isLoading || job.youtubeCommentCount === null} // Also disable if no comment count
+                        className="w-full"
+                      >
+                        {contentIdeaStates.comments.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} 
+                        Analyze YouTube Comments
+                      </Button>
+                    )}
+                  </CardFooter>
+                   {/* Display errors or success messages for comment analysis */} 
+                  {(contentIdeaStates.comments.error || contentIdeaStates.comments.successMessage) && (
+                    <div className="p-4 text-sm">
+                      {contentIdeaStates.comments.error && <p className="text-destructive">Error: {contentIdeaStates.comments.error}</p>}
+                      {contentIdeaStates.comments.successMessage && !contentIdeaStates.comments.newJobId && <p className="text-green-600">{contentIdeaStates.comments.successMessage}</p>}
+                    </div>
+                  )}
+                </Card>
               </div>
             ) : (
-              <>
-                {isYouTubeVideo ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button disabled={contentIdeaState.isLoading}>
-                        {contentIdeaState.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                        Generate Content Ideas
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuItem onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[0])} disabled={contentIdeaState.isLoading}>
-                        Normal Analysis (from transcript)
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[1])} disabled={contentIdeaState.isLoading}>
-                        Comment Analysis (from YouTube comments)
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : (
-                  <Button 
-                    onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[0])} // Explicitly 'normal'
-                    disabled={contentIdeaState.isLoading}
-                  >
-                    {contentIdeaState.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} 
-                    Generate Ideas (Normal Analysis)
-                  </Button>
+              // Single card layout for non-YouTube videos
+              <Card className="flex flex-col max-w-lg mx-auto"> {/* Centered and max-width for single card */}
+                <CardHeader>
+                  <CardTitle>Transcript Analysis</CardTitle>
+                  <CardDescription>Get content ideas based on the full transcript text.</CardDescription>
+                </CardHeader>
+                <CardContent className="flex-grow space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    This analysis delves into the core themes, keywords, and narratives present in the video&apos;s transcription. 
+                    Ideal for brainstorming blog posts, new video topics, or social media updates derived directly from the original content.
+                  </p>
+                </CardContent>
+                <CardFooter className="mt-auto">
+                  {contentIdeaStates.normal.newJobId ? (
+                    <Button asChild className="w-full">
+                      <Link href={`/content-ideas/${contentIdeaStates.normal.newJobId}`}>
+                        View Transcript Analysis Job <ExternalLink className="ml-2 h-4 w-4" />
+                      </Link>
+                    </Button>
+                  ) : (
+                    <Button 
+                      onClick={() => handleGenerateContentIdeas(contentIdeaJobTypeEnum.enumValues[0])}
+                      disabled={contentIdeaStates.normal.isLoading}
+                      className="w-full"
+                    >
+                      {contentIdeaStates.normal.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} 
+                      Generate Ideas from Transcript
+                    </Button>
+                  )}
+                </CardFooter>
+                {/* Display errors or success messages for normal analysis (non-YouTube) */} 
+                {(contentIdeaStates.normal.error || contentIdeaStates.normal.successMessage) && (
+                  <div className="p-4 text-sm">
+                    {contentIdeaStates.normal.error && <p className="text-destructive">Error: {contentIdeaStates.normal.error}</p>}
+                    {contentIdeaStates.normal.successMessage && !contentIdeaStates.normal.newJobId && <p className="text-green-600">{contentIdeaStates.normal.successMessage}</p>}
+                  </div>
                 )}
-              </>
-            )}
-            {contentIdeaState.error && (
-              <p className="text-destructive mt-3">Error: {contentIdeaState.error}</p>
+              </Card>
             )}
           </CardContent>
         </Card>
