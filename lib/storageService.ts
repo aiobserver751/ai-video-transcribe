@@ -13,13 +13,13 @@ import { s3, getBucketName } from './s3Client.ts';
 import { logger } from './logger.ts';
 
 // Constants
-const DEFAULT_LOCAL_STORAGE_PATH = path.join(process.cwd(), 'tmp');
-const LOCAL_STORAGE_PATH = process.env.LOCAL_STORAGE_PATH || DEFAULT_LOCAL_STORAGE_PATH;
-const LOCAL_TMP_PATH = path.join(LOCAL_STORAGE_PATH, 'tmp');
 const isProduction = process.env.NODE_ENV === 'production';
+const DEFAULT_LOCAL_STORAGE_PATH = path.join(process.cwd(), 'tmp');
+const LOCAL_STORAGE_PATH = isProduction ? '' : (process.env.LOCAL_STORAGE_PATH || DEFAULT_LOCAL_STORAGE_PATH);
+const LOCAL_TMP_PATH = isProduction ? '' : path.join(LOCAL_STORAGE_PATH, 'tmp');
 
-// Ensure both paths exist
-if (!isProduction) {
+// Ensure both paths exist (only in development)
+if (!isProduction && LOCAL_STORAGE_PATH) {
   if (!fs.existsSync(LOCAL_STORAGE_PATH)) {
     fs.mkdirSync(LOCAL_STORAGE_PATH, { recursive: true });
     logger.info(`Created local storage directory: ${LOCAL_STORAGE_PATH}`);
@@ -44,13 +44,18 @@ class StorageService {
     this.bucketName = getBucketName();
     this.localStoragePath = LOCAL_STORAGE_PATH;
     
-    if (isProduction && !this.s3Client) {
+    // Skip validation during build process
+    const isBuildTime = process.env.SKIP_S3_VALIDATION === 'true' || process.env.NEXT_PHASE === 'phase-production-build';
+    
+    if (isProduction && !this.s3Client && !isBuildTime) {
       throw new Error('S3 client is required in production mode but is not configured properly');
     }
     
-    logger.info(`Storage service initialized: ${isProduction ? 'PRODUCTION (S3)' : 'DEVELOPMENT (local)'}`);
-    if (!isProduction) {
-      logger.info(`Local storage path: ${this.localStoragePath}`);
+    if (!isBuildTime) {
+      logger.info(`Storage service initialized: ${isProduction ? 'PRODUCTION (S3)' : 'DEVELOPMENT (local)'}`);
+      if (!isProduction && this.localStoragePath) {
+        logger.info(`Local storage path: ${this.localStoragePath}`);
+      }
     }
   }
   
@@ -62,7 +67,10 @@ class StorageService {
    * @returns The full path to the saved file
    */
   async saveFile(content: string | Buffer, filePath: string, contentType?: string): Promise<string> {
-    if (isProduction && this.s3Client) {
+    if (isProduction) {
+      if (!this.s3Client) {
+        throw new Error('S3 client is required in production mode but is not configured properly');
+      }
       return this.saveToS3(content, filePath, contentType);
     } else {
       return this.saveToLocal(content, filePath);
@@ -75,7 +83,10 @@ class StorageService {
    * @returns The file content as a string
    */
   async readFile(filePath: string): Promise<string> {
-    if (isProduction && this.s3Client) {
+    if (isProduction) {
+      if (!this.s3Client) {
+        throw new Error('S3 client is required in production mode but is not configured properly');
+      }
       return this.readFromS3(filePath);
     } else {
       return this.readFromLocal(filePath);
@@ -88,7 +99,10 @@ class StorageService {
    * @returns A boolean indicating success
    */
   async deleteFile(filePath: string): Promise<boolean> {
-    if (isProduction && this.s3Client) {
+    if (isProduction) {
+      if (!this.s3Client) {
+        throw new Error('S3 client is required in production mode but is not configured properly');
+      }
       return this.deleteFromS3(filePath);
     } else {
       return this.deleteFromLocal(filePath);
@@ -101,7 +115,10 @@ class StorageService {
    * @returns A boolean indicating if the file exists
    */
   async fileExists(filePath: string): Promise<boolean> {
-    if (isProduction && this.s3Client) {
+    if (isProduction) {
+      if (!this.s3Client) {
+        throw new Error('S3 client is required in production mode but is not configured properly');
+      }
       return this.existsInS3(filePath);
     } else {
       return this.existsInLocal(filePath);
@@ -114,7 +131,10 @@ class StorageService {
    * @returns The URL to the file
    */
   async getFileUrl(filePath: string): Promise<string> {
-    if (isProduction && this.s3Client) {
+    if (isProduction) {
+      if (!this.s3Client) {
+        throw new Error('S3 client is required in production mode but is not configured properly');
+      }
       return this.getS3Url(filePath);
     } else {
       return this.getLocalUrl(filePath);
@@ -128,7 +148,10 @@ class StorageService {
    * @returns A promise that resolves when streaming is complete
    */
   async streamFile(filePath: string, writeStream: NodeJS.WritableStream): Promise<void> {
-    if (isProduction && this.s3Client) {
+    if (isProduction) {
+      if (!this.s3Client) {
+        throw new Error('S3 client is required in production mode but is not configured properly');
+      }
       return this.streamFromS3(filePath, writeStream);
     } else {
       return this.streamFromLocal(filePath, writeStream);
@@ -288,6 +311,10 @@ class StorageService {
   
   // Private methods for local storage
   private async saveToLocal(content: string | Buffer, filePath: string): Promise<string> {
+    if (isProduction) {
+      throw new Error('Local storage operations are not allowed in production mode');
+    }
+    
     const fullPath = path.join(this.localStoragePath, filePath);
     const dirPath = path.dirname(fullPath);
     
@@ -364,6 +391,119 @@ class StorageService {
       logger.error(`Error streaming file from local storage: ${fullPath} - ${errorMessage}`);
       throw error;
     }
+  }
+
+  /**
+   * Temporary file operations - these always use local filesystem regardless of environment
+   * These methods are for processing files that don't need to be persisted to S3
+   */
+
+  /**
+   * Save a temporary file (always local, regardless of environment)
+   * @param content - The content to save
+   * @param filePath - The path within the temp directory
+   * @returns The full path to the saved file
+   */
+  async saveTempFile(content: string | Buffer, filePath: string): Promise<string> {
+    const tmpDir = getTmpPath();
+    const fullPath = path.join(tmpDir, filePath);
+    const dirPath = path.dirname(fullPath);
+    
+    try {
+      // Ensure directory exists
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+      }
+      
+      await fs.promises.writeFile(fullPath, content);
+      logger.debug(`Saved temp file: ${fullPath}`);
+      
+      return fullPath;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`Error saving temp file: ${fullPath} - ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Read a temporary file (always local, regardless of environment)
+   * @param filePath - The path within the temp directory
+   * @returns The file content as a string
+   */
+  async readTempFile(filePath: string): Promise<string> {
+    const tmpDir = getTmpPath();
+    const fullPath = path.join(tmpDir, filePath);
+    
+    try {
+      const content = await fs.promises.readFile(fullPath, 'utf-8');
+      return content;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`Error reading temp file: ${fullPath} - ${errorMessage}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a temporary file (always local, regardless of environment)
+   * @param filePath - The path within the temp directory
+   * @returns A boolean indicating success
+   */
+  async deleteTempFile(filePath: string): Promise<boolean> {
+    const tmpDir = getTmpPath();
+    const fullPath = path.join(tmpDir, filePath);
+    
+    try {
+      if (fs.existsSync(fullPath)) {
+        await fs.promises.unlink(fullPath);
+        logger.debug(`Deleted temp file: ${fullPath}`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`Error deleting temp file: ${fullPath} - ${errorMessage}`);
+      return false;
+    }
+  }
+
+  /**
+   * Check if a temporary file exists (always local, regardless of environment)
+   * @param filePath - The path within the temp directory
+   * @returns A boolean indicating if the file exists
+   */
+  tempFileExists(filePath: string): boolean {
+    const tmpDir = getTmpPath();
+    const fullPath = path.join(tmpDir, filePath);
+    return fs.existsSync(fullPath);
+  }
+
+  /**
+   * Get the full path to a temporary file
+   * @param filePath - The path within the temp directory
+   * @returns The full path to the file
+   */
+  getTempFilePath(filePath: string): string {
+    const tmpDir = getTmpPath();
+    return path.join(tmpDir, filePath);
+  }
+
+  /**
+   * Create a temporary directory
+   * @param dirPath - The directory path within the temp directory
+   * @returns The full path to the created directory
+   */
+  createTempDir(dirPath: string): string {
+    const tmpDir = getTmpPath();
+    const fullPath = path.join(tmpDir, dirPath);
+    
+    if (!fs.existsSync(fullPath)) {
+      fs.mkdirSync(fullPath, { recursive: true });
+      logger.debug(`Created temp directory: ${fullPath}`);
+    }
+    
+    return fullPath;
   }
 }
 

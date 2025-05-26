@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getTmpPath, storageService } from './storageService';
 
 // Rate limit configuration with defaults based on free tier
 interface RateLimitConfig {
@@ -30,7 +31,7 @@ const DEFAULT_CONFIG: RateLimitConfig = {
   tier: 'free',
   whisperASH: 7200,  // 7,200 audio seconds per hour
   whisperASD: 28800, // 28,800 audio seconds per day
-  trackingFilePath: path.join(process.cwd(), 'tmp', 'groq-rate-limits.json')
+  trackingFilePath: path.join(getTmpPath(), 'groq-rate-limits.json')
 };
 
 /**
@@ -50,17 +51,14 @@ function loadConfig(): RateLimitConfig {
  */
 function initTrackingData(): RateUsageData {
   const config = loadConfig();
-  const trackingDir = path.dirname(config.trackingFilePath);
-  
-  // Ensure directory exists
-  if (!fs.existsSync(trackingDir)) {
-    fs.mkdirSync(trackingDir, { recursive: true });
-  }
+  const relativePath = path.relative(getTmpPath(), config.trackingFilePath);
   
   // Load existing data or create new
-  if (fs.existsSync(config.trackingFilePath)) {
+  if (storageService.tempFileExists(relativePath)) {
     try {
-      const fileData = fs.readFileSync(config.trackingFilePath, 'utf-8');
+      // Use synchronous approach for initialization
+      const fullPath = storageService.getTempFilePath(relativePath);
+      const fileData = fs.readFileSync(fullPath, 'utf-8');
       return JSON.parse(fileData);
     } catch (error) {
       console.warn('Error loading rate limit tracking data, creating new:', error);
@@ -94,7 +92,16 @@ function initTrackingData(): RateUsageData {
  */
 function saveTrackingData(data: RateUsageData): void {
   const config = loadConfig();
-  fs.writeFileSync(config.trackingFilePath, JSON.stringify(data, null, 2));
+  const relativePath = path.relative(getTmpPath(), config.trackingFilePath);
+  const fullPath = storageService.getTempFilePath(relativePath);
+  
+  // Ensure directory exists
+  const dirPath = path.dirname(fullPath);
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+  
+  fs.writeFileSync(fullPath, JSON.stringify(data, null, 2));
 }
 
 /**

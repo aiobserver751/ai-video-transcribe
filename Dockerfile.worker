@@ -28,7 +28,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-# Build stage for workers - same build process as web
+# Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
@@ -134,17 +134,32 @@ ENV NEXT_PHASE="phase-production-build"
 # Build Next.js application
 RUN npm run build
 
-# Production image for workers - IDENTICAL to web container
-FROM base AS runner
+# Production image - create a clean runtime image
+FROM node:20.18.0-alpine AS runner
 WORKDIR /app
+
+# Install only runtime system dependencies
+RUN apk add --no-cache \
+    python3 \
+    ffmpeg
+
+# Copy yt-dlp binary from the base stage
+COPY --from=base /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 
 ENV NODE_ENV=production
 
+# Create user for security
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-# Copy the EXACT same files as web container
+# Copy the public folder
 COPY --from=builder /app/public ./public
+
+# Set the correct permission for prerender cache
+RUN mkdir .next
+RUN chown nextjs:nodejs .next
+
+# Copy the build output
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
@@ -156,4 +171,4 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
 # ONLY difference: run workers instead of web server
-CMD ["npm", "run", "workers"]
+CMD ["node", "scripts/init-workers.js"]

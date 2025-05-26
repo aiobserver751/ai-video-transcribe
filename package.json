@@ -12,6 +12,7 @@
     "start": "next start",
     "lint": "next lint",
     "workers": "tsx scripts/init-workers.ts",
+    "workers:prod": "node scripts/init-workers.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --loader ts-node/esm scripts/migrate.ts",
     "db:studio": "drizzle-kit studio",

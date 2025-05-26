@@ -3,11 +3,11 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
 import { transcribeAudio } from '@/lib/transcription';
 import { transcribeAudioWithGroq } from '@/lib/groq-transcription';
 import { rateLimitTracker } from '@/lib/rate-limit-tracker';
 import { logger } from '@/lib/logger';
+import { getTmpPath, storageService } from '@/lib/storageService';
 
 const execAsync = promisify(exec);
 
@@ -77,17 +77,12 @@ export async function POST(request: Request) {
     const timestamp = Date.now();
     
     // Use environment-aware temp directory
-    const isProduction = process.env.NODE_ENV === 'production';
-    const tmpDir = isProduction 
-      ? path.join(os.tmpdir(), 'ai-video-transcribe')
-      : path.join(process.cwd(), 'tmp');
+    const tmpDir = getTmpPath();
       
     const audioPath = path.join(tmpDir, `audio_${timestamp}.mp3`);
 
-    // Make sure tmp directory exists
-    if (!fs.existsSync(tmpDir)) {
-      fs.mkdirSync(tmpDir, { recursive: true });
-    }
+    // Make sure tmp directory exists (handled by storageService)
+    storageService.createTempDir('');
 
     try {
       // Download audio directly using yt-dlp

@@ -54,9 +54,9 @@ function getContentIdeasQueue(): Queue<ContentIdeaJobData, ContentIdeaJobResult>
 
   if (!_contentIdeasQueue) {
     _contentIdeasQueue = new Queue<ContentIdeaJobData, ContentIdeaJobResult>(
-      QUEUE_NAMES.CONTENT_IDEAS,
-      {
-        connection: createRedisConnection(),
+  QUEUE_NAMES.CONTENT_IDEAS,
+  {
+    connection: createRedisConnection(),
         defaultJobOptions
       }
     );

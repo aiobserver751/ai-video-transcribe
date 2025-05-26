@@ -3,6 +3,11 @@ import { logger } from './logger.ts';
 
 // Function to validate S3 environment variables
 function validateS3EnvironmentVariables(): boolean {
+  // Skip validation during build process
+  if (process.env.SKIP_S3_VALIDATION === 'true' || process.env.NEXT_PHASE === 'phase-production-build') {
+    return false;
+  }
+
   const requiredVars = [
     'S3_ENDPOINT_URL',
     'S3_ACCESS_KEY',

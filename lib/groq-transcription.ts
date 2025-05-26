@@ -1,5 +1,6 @@
 import { logger } from './logger.ts';
 import { rateLimitTracker } from './rate-limit-tracker.ts';
+import { getTmpPath } from './storageService';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -246,7 +247,7 @@ export async function transcribeAudioWithGroq(audioPath: string): Promise<GroqVe
     logger.info('\n=== Starting Chunking Process for Groq API ===');
     
     const timestamp = Date.now();
-    chunksDir = path.join(process.cwd(), 'tmp', `groq_chunks_${timestamp}`); // Assign to outer scope variable
+    chunksDir = path.join(getTmpPath(), `groq_chunks_${timestamp}`); // Assign to outer scope variable
     await mkdirAsync(chunksDir, { recursive: true });
 
     // Split on silence, minimum 1 second of silence

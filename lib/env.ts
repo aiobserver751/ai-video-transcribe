@@ -33,12 +33,12 @@ const isRedisDisabled = process.env.DISABLE_REDIS_CONNECTION === 'true' ||
                        process.env.NODE_ENV === 'test';
 
 if (!isRedisDisabled) {
-  const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
-  if (missingVars.length > 0) {
-    logger.error('Missing required environment variables:', missingVars);
-    throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
-  }
+if (missingVars.length > 0) {
+  logger.error('Missing required environment variables:', missingVars);
+  throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+}
 }
 
 // Clean up host format (remove port if included) - use dummy values if Redis is disabled

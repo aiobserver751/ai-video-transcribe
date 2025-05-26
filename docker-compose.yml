@@ -10,9 +10,7 @@ services:
     # Environment variables will be set in DigitalOcean App Platform GUI
     # No need for env_file when deploying to cloud platforms
     restart: unless-stopped
-    volumes:
-      # Mount tmp directory for file processing
-      - ./tmp:/app/tmp
+    # Note: No volume mounts needed - using system temp directories in production
     # Uncomment if you need to persist data
     # volumes:
     #   - app-data:/app/data
