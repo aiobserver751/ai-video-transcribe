@@ -1,4 +1,4 @@
-import { Queue, Worker, QueueEvents, FlowProducer } from 'bullmq';
+import { Queue, Worker, QueueEvents } from 'bullmq';
 import { createRedisConnection, QUEUE_NAMES, PRIORITY, defaultJobOptions, JOB_STATUS } from './config.ts';
 import { logger } from '../logger.ts';
 import path from 'path';
@@ -27,6 +27,76 @@ import { getVideoPlatform } from "@/lib/utils/urlUtils"; // REMOVED isYouTubeUrl
 import { storageService, getTmpPath } from '../../lib/storageService.ts';
 
 const execAsync = promisify(exec);
+
+// Check if we're in build mode or Redis is disabled
+const isRedisDisabled = process.env.DISABLE_REDIS_CONNECTION === 'true' || 
+                       process.env.SKIP_REDIS_VALIDATION === 'true' ||
+                       process.env.NODE_ENV === 'test' ||
+                       process.env.NEXT_PHASE === 'phase-production-build' ||
+                       process.env.BUILD_SKIP_STATIC_GENERATION === 'true';
+
+// Lazy initialization of queues to prevent connections during build
+let _transcriptionQueue: Queue<TranscriptionJobData, TranscriptionResult> | null = null;
+let _transcriptionQueueEvents: QueueEvents | null = null;
+
+// Getter for transcription queue with lazy initialization
+function getTranscriptionQueue(): Queue<TranscriptionJobData, TranscriptionResult> {
+  if (isRedisDisabled) {
+    logger.info('Redis disabled, returning mock queue for transcription');
+    // Return a mock queue object for build time
+    return {
+      add: () => Promise.resolve({ id: 'mock-job-id' }),
+      getJob: () => Promise.resolve(null),
+      close: () => Promise.resolve(),
+      // Add other methods as needed for mock
+    } as unknown as Queue<TranscriptionJobData, TranscriptionResult>;
+  }
+
+  if (!_transcriptionQueue) {
+    _transcriptionQueue = new Queue<TranscriptionJobData, TranscriptionResult>(
+      QUEUE_NAMES.TRANSCRIPTION,
+      {
+        connection: createRedisConnection(),
+        defaultJobOptions
+      }
+    );
+  }
+  
+  return _transcriptionQueue;
+}
+
+// Getter for transcription queue events with lazy initialization
+function getTranscriptionQueueEvents(): QueueEvents {
+  if (isRedisDisabled) {
+    logger.info('Redis disabled, returning mock queue events for transcription');
+    return {
+      on: () => {},
+      off: () => {},
+      close: () => Promise.resolve(),
+    } as unknown as QueueEvents;
+  }
+
+  if (!_transcriptionQueueEvents) {
+    _transcriptionQueueEvents = new QueueEvents(QUEUE_NAMES.TRANSCRIPTION, {
+      connection: createRedisConnection()
+    });
+  }
+  
+  return _transcriptionQueueEvents;
+}
+
+// Export getters instead of direct instances
+export const transcriptionQueue = new Proxy({} as Queue<TranscriptionJobData, TranscriptionResult>, {
+  get(target, prop) {
+    return getTranscriptionQueue()[prop as keyof Queue<TranscriptionJobData, TranscriptionResult>];
+  }
+});
+
+export const transcriptionQueueEvents = new Proxy({} as QueueEvents, {
+  get(target, prop) {
+    return getTranscriptionQueueEvents()[prop as keyof QueueEvents];
+  }
+});
 
 // --- Helper Function to Extract Plain Text from SRT/VTT ---
 function extractPlainText(content: string, format: 'srt' | 'vtt'): string {
@@ -125,25 +195,6 @@ interface CallbackData {
   };
   error?: string;
 }
-
-// Initialize transcription queue
-export const transcriptionQueue = new Queue<TranscriptionJobData, TranscriptionResult>(
-  QUEUE_NAMES.TRANSCRIPTION,
-  {
-    connection: createRedisConnection(),
-    defaultJobOptions
-  }
-);
-
-// Initialize flow producer for parent-child job relationships
-export const flowProducer = new FlowProducer({
-  connection: createRedisConnection()
-});
-
-// Initialize queue events for monitoring
-export const transcriptionQueueEvents = new QueueEvents(QUEUE_NAMES.TRANSCRIPTION, {
-  connection: createRedisConnection()
-});
 
 // Add a transcription job to the queue
 export async function addTranscriptionJob(

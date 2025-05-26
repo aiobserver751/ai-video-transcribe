@@ -28,18 +28,74 @@ export interface ContentIdeaJobResult {
   error?: string;
 }
 
-// Initialize content ideas queue
-export const contentIdeasQueue = new Queue<ContentIdeaJobData, ContentIdeaJobResult>(
-  QUEUE_NAMES.CONTENT_IDEAS,
-  {
-    connection: createRedisConnection(),
-    defaultJobOptions, // Using the same default job options
-  }
-);
+// Check if we're in build mode or Redis is disabled
+const isRedisDisabled = process.env.DISABLE_REDIS_CONNECTION === 'true' || 
+                       process.env.SKIP_REDIS_VALIDATION === 'true' ||
+                       process.env.NODE_ENV === 'test' ||
+                       process.env.NEXT_PHASE === 'phase-production-build' ||
+                       process.env.BUILD_SKIP_STATIC_GENERATION === 'true';
 
-// Initialize queue events for monitoring
-export const contentIdeasQueueEvents = new QueueEvents(QUEUE_NAMES.CONTENT_IDEAS, {
-  connection: createRedisConnection(),
+// Lazy initialization of queues to prevent connections during build
+let _contentIdeasQueue: Queue<ContentIdeaJobData, ContentIdeaJobResult> | null = null;
+let _contentIdeasQueueEvents: QueueEvents | null = null;
+
+// Getter for content ideas queue with lazy initialization
+function getContentIdeasQueue(): Queue<ContentIdeaJobData, ContentIdeaJobResult> {
+  if (isRedisDisabled) {
+    logger.info('Redis disabled, returning mock queue for content ideas');
+    // Return a mock queue object for build time
+    return {
+      add: () => Promise.resolve({ id: 'mock-job-id' }),
+      getJob: () => Promise.resolve(null),
+      close: () => Promise.resolve(),
+      // Add other methods as needed for mock
+    } as unknown as Queue<ContentIdeaJobData, ContentIdeaJobResult>;
+  }
+
+  if (!_contentIdeasQueue) {
+    _contentIdeasQueue = new Queue<ContentIdeaJobData, ContentIdeaJobResult>(
+      QUEUE_NAMES.CONTENT_IDEAS,
+      {
+        connection: createRedisConnection(),
+        defaultJobOptions
+      }
+    );
+  }
+  
+  return _contentIdeasQueue;
+}
+
+// Getter for content ideas queue events with lazy initialization
+function getContentIdeasQueueEvents(): QueueEvents {
+  if (isRedisDisabled) {
+    logger.info('Redis disabled, returning mock queue events for content ideas');
+    return {
+      on: () => {},
+      off: () => {},
+      close: () => Promise.resolve(),
+    } as unknown as QueueEvents;
+  }
+
+  if (!_contentIdeasQueueEvents) {
+    _contentIdeasQueueEvents = new QueueEvents(QUEUE_NAMES.CONTENT_IDEAS, {
+      connection: createRedisConnection()
+    });
+  }
+  
+  return _contentIdeasQueueEvents;
+}
+
+// Export getters instead of direct instances
+export const contentIdeasQueue = new Proxy({} as Queue<ContentIdeaJobData, ContentIdeaJobResult>, {
+  get(target, prop) {
+    return getContentIdeasQueue()[prop as keyof Queue<ContentIdeaJobData, ContentIdeaJobResult>];
+  }
+});
+
+export const contentIdeasQueueEvents = new Proxy({} as QueueEvents, {
+  get(target, prop) {
+    return getContentIdeasQueueEvents()[prop as keyof QueueEvents];
+  }
 });
 
 // Add a content idea job to the queue
