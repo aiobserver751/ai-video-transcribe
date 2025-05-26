@@ -308,26 +308,30 @@ async function saveContentToFile(
   extension: 'txt' | 'srt' | 'vtt',
   userId: string
 ): Promise<{filePath: string, fileNameWithExt: string}> {
-  // Use a more descriptive name
-  const fileNameWithExt = `${path.basename(baseFileName, path.extname(baseFileName))}_${jobId}.${extension}`;
-  
-  // Storage path for user files (users/<USER_ID>/...)
+  const fileNameWithExt = `${baseFileName}_${jobId}.${extension}`;
   const storagePath = `users/${userId}/jobs/${jobId}/${fileNameWithExt}`;
   
   try {
     await storageService.saveFile(content, storagePath, extension === 'txt' ? 'text/plain' : 'text/plain');
     logger.info(`[${jobId}] Saved ${extension.toUpperCase()} content to storage: ${storagePath}`);
     
-    // For local processing, we still need to maintain the local tmp files in the tmp dir
-    const jobTmpDir = path.join(getTmpPath(), jobId);
-    if (!fs.existsSync(jobTmpDir)) {
-      fs.mkdirSync(jobTmpDir, { recursive: true });
-    }
-    
-    const localFilePath = path.join(jobTmpDir, fileNameWithExt);
-    // Only write to local tmp if it doesn't exist and we're in an environment that needs it
-    if (!fs.existsSync(localFilePath)) {
-      await fs.promises.writeFile(localFilePath, content, 'utf-8');
+    // Only create local tmp files in development mode
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (!isProduction) {
+      // For local processing, we still need to maintain the local tmp files in the tmp dir
+      const jobTmpDir = path.join(getTmpPath(), jobId);
+      if (!fs.existsSync(jobTmpDir)) {
+        fs.mkdirSync(jobTmpDir, { recursive: true });
+      }
+      
+      const localFilePath = path.join(jobTmpDir, fileNameWithExt);
+      // Only write to local tmp if it doesn't exist and we're in development
+      if (!fs.existsSync(localFilePath)) {
+        await fs.promises.writeFile(localFilePath, content, 'utf-8');
+        logger.info(`[${jobId}] Saved ${extension.toUpperCase()} content to local tmp: ${localFilePath}`);
+      }
+    } else {
+      logger.info(`[${jobId}] Production mode: Skipping local tmp file creation, using S3 storage only`);
     }
     
     // Return the storage path for URL generation and the file name for reference

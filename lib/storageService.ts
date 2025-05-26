@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { 
   S3Client, 
   PutObjectCommand, 
@@ -370,4 +371,73 @@ class StorageService {
 export const storageService = new StorageService();
 
 // Export the LOCAL_TMP_PATH for use in the transcription queue
-export const getTmpPath = () => LOCAL_TMP_PATH; 
+export const getTmpPath = () => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  if (isProduction) {
+    // In production, use the system temp directory which should be writable
+    const systemTmpDir = path.join(os.tmpdir(), 'ai-video-transcribe');
+    
+    // Ensure the directory exists
+    if (!fs.existsSync(systemTmpDir)) {
+      fs.mkdirSync(systemTmpDir, { recursive: true });
+      logger.info(`Created production tmp directory: ${systemTmpDir}`);
+    }
+    
+    return systemTmpDir;
+  } else {
+    // In development, use the local tmp path as before
+    return LOCAL_TMP_PATH;
+  }
+};
+
+// Enhanced cleanup function for production environments
+export const cleanupOldTempFiles = async (maxAgeHours: number = 2): Promise<void> => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (!isProduction) return; // Only run in production
+  
+  const tmpDir = getTmpPath();
+  const maxAgeMs = maxAgeHours * 60 * 60 * 1000; // Convert hours to milliseconds
+  const now = Date.now();
+  
+  try {
+    if (!fs.existsSync(tmpDir)) return;
+    
+    const files = await fs.promises.readdir(tmpDir);
+    let cleanedCount = 0;
+    let errorCount = 0;
+    
+    for (const file of files) {
+      try {
+        const filePath = path.join(tmpDir, file);
+        const stats = await fs.promises.stat(filePath);
+        const fileAge = now - stats.mtime.getTime();
+        
+        if (fileAge > maxAgeMs) {
+          await fs.promises.unlink(filePath);
+          cleanedCount++;
+          logger.debug(`Cleaned up old temp file: ${file} (age: ${Math.round(fileAge / 1000 / 60)} minutes)`);
+        }
+      } catch (error) {
+        errorCount++;
+        logger.warn(`Error cleaning up temp file ${file}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    
+    if (cleanedCount > 0 || errorCount > 0) {
+      logger.info(`Temp cleanup completed: ${cleanedCount} files cleaned, ${errorCount} errors`);
+    }
+  } catch (error) {
+    logger.error(`Error during temp directory cleanup: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+// Start periodic cleanup in production
+if (process.env.NODE_ENV === 'production') {
+  // Run cleanup every 30 minutes
+  setInterval(() => {
+    cleanupOldTempFiles(2); // Clean files older than 2 hours
+  }, 30 * 60 * 1000);
+  
+  logger.info('Started periodic temp file cleanup (every 30 minutes, files older than 2 hours)');
+} 
