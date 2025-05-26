@@ -44,7 +44,7 @@ const isBuilding = process.env.NODE_ENV === 'production' &&
                    process.env.NEXT_PHASE === 'phase-production-build');
 
 if (!isBuilding) {
-  testConnection();
+testConnection(); 
 } else {
   logger.info('[Database] Skipping database connection test during build phase');
 } 

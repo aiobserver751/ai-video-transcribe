@@ -1,1 +1,60 @@
- 
+# Use Node.js official image with the correct version
+FROM node:20.18.0-alpine AS base
+
+# Install system dependencies including Python and build tools
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    make \
+    g++ \
+    gcc \
+    musl-dev \
+    linux-headers \
+    curl \
+    wget \
+    git \
+    ffmpeg
+
+# Install yt-dlp using the recommended method for Alpine
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+RUN chmod a+rx /usr/local/bin/yt-dlp
+
+# Verify installations
+RUN ffmpeg -version && ffprobe -version && yt-dlp --version
+
+# Install dependencies only when needed
+FROM base AS deps
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Build stage for workers - same build process as web
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Build Next.js application (needed for shared code)
+RUN npm run build
+
+# Production image for workers
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# Copy built application and dependencies
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/drizzle ./drizzle
+
+USER nextjs
+
+# Run the worker initialization script
+CMD ["npm", "run", "workers"]
