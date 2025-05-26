@@ -2,20 +2,27 @@ import IORedis from 'ioredis';
 import { logger } from '../logger.ts';
 import { env } from '../env.ts';
 
-// Validate required environment variables
+// Check if Redis connections should be disabled (e.g., during build)
+const isRedisDisabled = process.env.DISABLE_REDIS_CONNECTION === 'true' || 
+                       process.env.SKIP_REDIS_VALIDATION === 'true' ||
+                       process.env.NODE_ENV === 'test';
+
+// Validate required environment variables (skip during build)
 const requiredEnvVars = {
   REDIS_HOST: process.env.REDIS_HOST,
   REDIS_PORT: process.env.REDIS_PORT,
   REDIS_PASSWORD: process.env.REDIS_PASSWORD
 };
 
-// Check for missing environment variables
-const missingVars = Object.entries(requiredEnvVars)
-  .filter(([, value]) => !value)
-  .map(([key]) => key);
+// Check for missing environment variables (skip during build)
+if (!isRedisDisabled) {
+  const missingVars = Object.entries(requiredEnvVars)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
 
-if (missingVars.length > 0) {
-  throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+  if (missingVars.length > 0) {
+    throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+  }
 }
 
 // Redis connection configuration
@@ -34,6 +41,32 @@ export const redisConnection = {
 
 // Create Redis connection
 export const createRedisConnection = () => {
+  // Return mock connection during build or when Redis is disabled
+  if (isRedisDisabled) {
+    logger.info('Redis connections disabled (build mode), returning mock connection');
+    return {
+      // Mock Redis client methods that might be called
+      quit: () => Promise.resolve(),
+      disconnect: () => Promise.resolve(),
+      on: () => {},
+      off: () => {},
+      ping: () => Promise.resolve('PONG'),
+      get: () => Promise.resolve(null),
+      set: () => Promise.resolve('OK'),
+      del: () => Promise.resolve(0),
+      exists: () => Promise.resolve(0),
+      expire: () => Promise.resolve(0),
+      hget: () => Promise.resolve(null),
+      hset: () => Promise.resolve(0),
+      hdel: () => Promise.resolve(0),
+      lpush: () => Promise.resolve(0),
+      rpop: () => Promise.resolve(null),
+      llen: () => Promise.resolve(0),
+      lrange: () => Promise.resolve([]),
+      ltrim: () => Promise.resolve('OK'),
+    } as unknown as IORedis;
+  }
+
   logger.info('Creating Redis connection with config:', {
     host: redisConnection.host,
     port: redisConnection.port,

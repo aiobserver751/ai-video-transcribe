@@ -27,17 +27,24 @@ const requiredEnvVars = [
   'REDIS_PASSWORD'
 ];
 
-const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+// Check if Redis connections should be disabled (e.g., during build)
+const isRedisDisabled = process.env.DISABLE_REDIS_CONNECTION === 'true' || 
+                       process.env.SKIP_REDIS_VALIDATION === 'true' ||
+                       process.env.NODE_ENV === 'test';
 
-if (missingVars.length > 0) {
-  logger.error('Missing required environment variables:', missingVars);
-  throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+if (!isRedisDisabled) {
+  const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+  if (missingVars.length > 0) {
+    logger.error('Missing required environment variables:', missingVars);
+    throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+  }
 }
 
-// Clean up host format (remove port if included)
-const host = process.env.REDIS_HOST!.split(':')[0];
-const port = parseInt(process.env.REDIS_PORT!, 10);
-const password = process.env.REDIS_PASSWORD!;
+// Clean up host format (remove port if included) - use dummy values if Redis is disabled
+const host = isRedisDisabled ? 'dummy-host' : process.env.REDIS_HOST!.split(':')[0];
+const port = isRedisDisabled ? 6379 : parseInt(process.env.REDIS_PORT!, 10);
+const password = isRedisDisabled ? 'dummy-password' : process.env.REDIS_PASSWORD!;
 
 // Log the Redis configuration (without password)
 logger.info('Redis configuration loaded:', {

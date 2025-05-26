@@ -47,10 +47,13 @@ ENV NEXT_PUBLIC_MAX_FILE_SIZE="104857600"
 # Database
 ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
 
-# Redis/Queue Configuration
-ENV REDIS_HOST="localhost"
+# Redis/Queue Configuration - Use dummy values for build
+ENV REDIS_HOST="dummy-redis-host"
 ENV REDIS_PORT="6379"
-ENV REDIS_PASSWORD="dummy-password"
+ENV REDIS_PASSWORD="dummy-redis-password"
+ENV REDIS_URL="redis://dummy:dummy-redis-password@dummy-redis-host:6379"
+ENV DISABLE_REDIS_CONNECTION="true"
+ENV SKIP_REDIS_VALIDATION="true"
 ENV ENABLE_QUEUE_WORKERS="false"
 ENV TRANSCRIPTION_CONCURRENCY="2"
 ENV CONTENT_IDEAS_CONCURRENCY="1"
