@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Push Docker Images
 
 on:
   push:
@@ -23,15 +23,28 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     
-    - name: Build and push
+    - name: Build and push web image
       uses: docker/build-push-action@v5
       with:
         context: .
+        file: ./Dockerfile.web
         push: true
         tags: |
-          ${{ secrets.DOCKERHUB_USERNAME }}/ai-video-transcribe:latest
-          ${{ secrets.DOCKERHUB_USERNAME }}/ai-video-transcribe:${{ github.sha }}
+          ${{ secrets.DOCKERHUB_USERNAME }}/ai-video-transcribe:web-latest
+          ${{ secrets.DOCKERHUB_USERNAME }}/ai-video-transcribe:web-${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        # Building for linux/amd64 only (DigitalOcean standard)
+        platforms: linux/amd64
+        
+    - name: Build and push worker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.worker
+        push: true
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/ai-video-transcribe:worker-latest
+          ${{ secrets.DOCKERHUB_USERNAME }}/ai-video-transcribe:worker-${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
         platforms: linux/amd64 
