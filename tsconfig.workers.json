@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./dist", 
+    "module": "commonjs",
+    "isolatedModules": false,
+    // Remove Next.js specific plugin if present in inherited options
+    "plugins": [] 
+  },
+  "include": [
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "app",
+    "components",
+    ".next",
+    "public"
+    // any other Next.js specific directories from the main tsconfig's include that aren't needed for workers
+  ]
+} 

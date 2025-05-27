@@ -1,19 +1,32 @@
 version: '3.8'
 
 services:
-  app:
-    build: .
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: ai-video-transcribe/web # Or your Docker Hub username/web
     ports:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-    # Environment variables will be set in DigitalOcean App Platform GUI
-    # No need for env_file when deploying to cloud platforms
+      # Add any other environment variables specific to web, or use an env_file
     restart: unless-stopped
-    # Note: No volume mounts needed - using system temp directories in production
-    # Uncomment if you need to persist data
-    # volumes:
-    #   - app-data:/app/data
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: ai-video-transcribe/worker # Or your Docker Hub username/worker
+    environment:
+      - NODE_ENV=production
+      # Add any other environment variables specific to worker, or use an env_file
+    restart: unless-stopped
+
+# Note: No volume mounts needed - using system temp directories in production
+# Uncomment if you need to persist data
+# volumes:
+#   app-data:/app/data
 
 # Uncomment if you need persistent volumes
 # volumes:
