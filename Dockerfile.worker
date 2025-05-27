@@ -163,15 +163,8 @@ RUN chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy source files needed for worker execution
-COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
-COPY --from=builder --chown=nextjs:nodejs /app/lib ./lib
-COPY --from=builder --chown=nextjs:nodejs /app/server ./server
-COPY --from=builder --chown=nextjs:nodejs /app/types ./types
-COPY --from=builder --chown=nextjs:nodejs /app/context ./context
-COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
-COPY --from=builder --chown=nextjs:nodejs /app/tsconfig.json ./tsconfig.json
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+# Copy the ENTIRE codebase for full access (complex architecture requirement)
+COPY --from=builder --chown=nextjs:nodejs /app ./
 
 # Install tsx globally for running TypeScript directly
 RUN npm install -g tsx
