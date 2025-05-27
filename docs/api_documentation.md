@@ -1,4 +1,4 @@
-# AI Video Transcribe API Documentation
+# AI Video Transcribe API Documentation 
 
 This document provides instructions and examples for interacting with the AI Video Transcribe API.
 
