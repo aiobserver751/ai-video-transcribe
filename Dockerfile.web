@@ -152,11 +152,16 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-# Copy the ENTIRE codebase for full access (complex architecture requirement)
-COPY --from=builder --chown=nextjs:nodejs /app ./
+# Copy the public folder
+COPY --from=builder /app/public ./public
 
-# Set the correct permission for prerender cache  
+# Set the correct permission for prerender cache
+RUN mkdir .next
 RUN chown nextjs:nodejs .next
+
+# Copy the build output (Next.js standalone approach for web)
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
