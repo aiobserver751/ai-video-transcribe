@@ -66,7 +66,7 @@ Workers need to:
 
 ## Key Files and Their Purpose
 
-### 1. `Dockerfile.web`
+### 1. `Dockerfile.web` 
 
 *   **Purpose:** Builds the Docker image for the Next.js web application using the standalone approach.
 *   **Description:**
