@@ -131,7 +131,7 @@ ENV DISABLE_DB_CHECKS="true"
 ENV BUILD_SKIP_STATIC_GENERATION="true"
 ENV NEXT_PHASE="phase-production-build"
 
-# Build Next.js application
+# Build Next.js application (no worker compilation needed now)
 RUN npm run build
 
 # Production image - create a clean runtime image
@@ -163,10 +163,18 @@ RUN chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Ensure the compiled worker script is available in the runner stage
-# This assumes 'npm run build' (which now includes 'compile:workers') compiles
-# 'scripts/init-workers.ts' to '/app/dist/scripts/init-workers.js' in the builder stage.
-COPY --from=builder --chown=nextjs:nodejs /app/dist/scripts/init-workers.js ./scripts/init-workers.js
+# Copy source files needed for worker execution
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+COPY --from=builder --chown=nextjs:nodejs /app/lib ./lib
+COPY --from=builder --chown=nextjs:nodejs /app/server ./server
+COPY --from=builder --chown=nextjs:nodejs /app/types ./types
+COPY --from=builder --chown=nextjs:nodejs /app/context ./context
+COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
+COPY --from=builder --chown=nextjs:nodejs /app/tsconfig.json ./tsconfig.json
+COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+
+# Install tsx globally for running TypeScript directly
+RUN npm install -g tsx
 
 USER nextjs
 
@@ -175,5 +183,5 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# ONLY difference: run workers instead of web server
-CMD ["node", "scripts/init-workers.js"]
+# Use tsx to run TypeScript directly instead of compiled JavaScript
+CMD ["tsx", "scripts/init-workers.ts"]

@@ -10,7 +10,7 @@ The application utilizes a multi-container Docker setup to separate concerns bet
     *   `Dockerfile.web`: Builds the image for the Next.js web application.
     *   `Dockerfile.worker`: Builds the image for the BullMQ background workers.
 2.  **Multi-Stage Builds:** Both Dockerfiles use multi-stage builds to create lean production images, separating build-time dependencies from runtime necessities.
-3.  **TypeScript Compilation:** A dedicated TypeScript configuration (`tsconfig.workers.json`) and an npm script (`compile:workers`) are used to compile worker-specific TypeScript files into JavaScript, which is then included in the worker image. The main Next.js application is also built from TypeScript.
+3.  **TypeScript Execution:** The worker container uses `tsx` to run TypeScript files directly in production, avoiding compilation issues with ES module imports.
 4.  **Docker Compose:** A `docker-compose.yml` file is provided for local development and testing of the multi-service environment.
 5.  **Automated Image Builds:** A GitHub Actions workflow (`.github/workflows/docker-build.yml`) automates the building of both web and worker Docker images and pushes them to Docker Hub upon changes to the main branches.
 
@@ -28,7 +28,7 @@ Here's a description of the important files in this Docker setup:
     *   **`builder` stage:**
         *   Copies source code and `node_modules`.
         *   Sets dummy environment variables for the build process.
-        *   Runs `npm run build` (which executes `npm run compile:workers && next build`) to compile worker scripts and build the Next.js application (generating the `.next/standalone` and `.next/static` directories).
+        *   Runs `npm run build` (which executes `next build`) to build the Next.js application (generating the `.next/standalone` and `.next/static` directories).
     *   **`runner` stage:**
         *   Creates a lean production image.
         *   Copies essential artifacts from the `builder` stage: `public` folder, `.next/standalone`, and `.next/static`.
@@ -42,13 +42,22 @@ Here's a description of the important files in this Docker setup:
 *   **Purpose:** Defines the instructions to build the Docker image for the BullMQ background worker processes.
 *   **Description:**
     *   Structurally very similar to `Dockerfile.web` for its `base`, `deps`, and `builder` stages. This ensures consistency and utilizes Docker's layer caching effectively.
-    *   The `RUN npm run build` in the `builder` stage also compiles the worker scripts (e.g., `scripts/init-workers.ts`) into JavaScript and places them in the `/app/dist/scripts/` directory within the `builder` stage.
+    *   The `RUN npm run build` in the `builder` stage builds the Next.js application but does not compile worker scripts.
     *   **`runner` stage (Key Differences):**
         *   Copies the Next.js build artifacts (`public`, `.next/standalone`, `.next/static`) similar to `Dockerfile.web`.
-        *   **Crucially, it adds a `COPY` instruction:**
-            `COPY --from=builder --chown=nextjs:nodejs /app/dist/scripts/init-workers.js ./scripts/init-workers.js`
-            This copies the compiled worker entry point script (e.g., `init-workers.js`) from the `builder` stage into the `runner` stage at `/app/scripts/init-workers.js`.
-        *   The `CMD ["node", "scripts/init-workers.js"]` starts the worker initialization script, which sets up and starts the BullMQ workers.
+        *   **Crucially, it copies the source TypeScript files:**
+            ```dockerfile
+            COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+            COPY --from=builder --chown=nextjs:nodejs /app/lib ./lib
+            COPY --from=builder --chown=nextjs:nodejs /app/server ./server
+            COPY --from=builder --chown=nextjs:nodejs /app/types ./types
+            COPY --from=builder --chown=nextjs:nodejs /app/context ./context
+            COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
+            COPY --from=builder --chown=nextjs:nodejs /app/tsconfig.json ./tsconfig.json
+            COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
+            ```
+        *   Installs `tsx` globally: `RUN npm install -g tsx`
+        *   The `CMD ["tsx", "scripts/init-workers.ts"]` uses tsx to run the TypeScript worker initialization script directly.
 
 ### 3. `docker-compose.yml`
 
@@ -62,28 +71,21 @@ Here's a description of the important files in this Docker setup:
 
 ### 4. `package.json`
 
-*   **Purpose:** Manages project dependencies and defines various npm scripts, including those critical for the Docker build process.
+*   **Purpose:** Manages project dependencies and defines various npm scripts.
 *   **Key Scripts:**
-    *   `"compile:workers": "tsc -p tsconfig.workers.json"`: This script uses the TypeScript compiler (`tsc`) with a specific configuration file (`tsconfig.workers.json`) to compile only the worker-related TypeScript files (typically in the `scripts/` directory) into JavaScript.
-    *   `"build": "npm run compile:workers && next build"`: This is the main build script run within the Dockerfiles. It first compiles the worker scripts and then executes `next build` to build the Next.js application.
-    *   `"workers:prod": "node scripts/init-workers.js"`: This script is what the `CMD` in `Dockerfile.worker` effectively runs. It directly executes the compiled JavaScript worker initialization file.
+    *   `"build": "next build"`: This is the main build script run within the Dockerfiles. It builds the Next.js application.
+    *   `"workers": "tsx scripts/init-workers.ts"`: This script runs the worker initialization using tsx for development.
+    *   `"workers:prod": "node scripts/init-workers.js"`: Legacy script (no longer used in Docker).
 
 ### 5. `tsconfig.json` (Root)
 
 *   **Purpose:** The main TypeScript configuration file for the Next.js application.
-*   **Key Setting:** Typically includes `"noEmit": true` because Next.js handles its own TypeScript-to-JavaScript transpilation using its internal build process (SWC/Babel).
+*   **Key Setting:** Includes `"allowImportingTsExtensions": true` and `"noEmit": true` because Next.js handles its own TypeScript-to-JavaScript transpilation.
 
 ### 6. `tsconfig.workers.json`
 
-*   **Purpose:** A dedicated TypeScript configuration file specifically for compiling the worker scripts (e.g., `scripts/init-workers.ts`).
-*   **Description:**
-    *   Usually `extends` the root `tsconfig.json` to inherit common settings.
-    *   **Key Settings:**
-        *   `"noEmit": false`: Overrides the base setting to **allow** the TypeScript compiler to output JavaScript files.
-        *   `"outDir": "./dist"`: Specifies that the compiled JavaScript files for workers should be placed in a `dist` directory (e.g., `scripts/init-workers.ts` compiles to `dist/scripts/init-workers.js`). This path is then used in `Dockerfile.worker` to `COPY` the compiled script.
-        *   `"module": "commonjs"`: Configures the output module system, typically CommonJS for Node.js environments.
-        *   `"include": ["scripts/**/*.ts"]`: Specifies that only files in the `scripts` directory should be compiled using this configuration.
-        *   It may also `exclude` Next.js specific directories or clear out Next.js specific compiler `plugins` inherited from the base `tsconfig.json`.
+*   **Purpose:** A dedicated TypeScript configuration file for worker scripts (currently not used in production Docker builds).
+*   **Note:** With the tsx approach, this file is no longer required for production builds but may still be useful for development tooling.
 
 ### 7. `.github/workflows/docker-build.yml`
 
@@ -133,7 +135,7 @@ After the GitHub Actions workflow has successfully built and pushed the images t
         *   Specify the repository: `your_dockerhub_username/ai-video-transcribe`
         *   Specify the tag: `web-latest` (or a specific commit SHA tag like `web-a1b2c3d` if you prefer to pin to a version).
         *   Configure necessary environment variables, port settings (e.g., HTTP port 3000), scaling, etc., as required for the web service.
-        *   Ensure `ENABLE_QUEUE_WORKERS` environment variable (or similar logic if you have it) is set to `false` or not present if this service should not run workers.
+        *   Ensure `ENABLE_QUEUE_WORKERS` environment variable is set to `false` or not present if this service should not run workers.
     *   Deploy/Update the service.
 3.  **Deploy Worker Service:**
     *   If creating a new service or updating an existing one for the worker processes:
@@ -141,8 +143,15 @@ After the GitHub Actions workflow has successfully built and pushed the images t
         *   Specify the repository: `your_dockerhub_username/ai-video-transcribe`
         *   Specify the tag: `worker-latest` (or a specific commit SHA tag like `worker-a1b2c3d`).
         *   Configure necessary environment variables (e.g., Redis connection details, API keys needed by jobs). The worker service typically does not need an exposed HTTP port unless it has a health check endpoint.
-        *   Ensure `ENABLE_QUEUE_WORKERS` environment variable (or similar logic) is set to `true` for this service.
-        *   Set the "Run Command" or "Entrypoint" if DigitalOcean UI overrides the Dockerfile's `CMD`. However, usually, for Docker Hub images, the `CMD` from the Dockerfile is respected.
+        *   Ensure `ENABLE_QUEUE_WORKERS` environment variable is set to `true` for this service.
+        *   **Important:** The worker service will automatically run `tsx scripts/init-workers.ts` as defined in the Dockerfile CMD.
     *   Deploy/Update the service.
+
+## Key Changes from Previous Setup
+
+1. **No TypeScript Compilation:** The worker container no longer attempts to compile TypeScript to JavaScript, avoiding import extension conflicts.
+2. **Direct TypeScript Execution:** Uses `tsx` to run TypeScript files directly in production.
+3. **Simplified Build Process:** The `npm run build` command only builds the Next.js application, not worker scripts.
+4. **Source Code Copying:** The worker container copies all necessary source files instead of compiled JavaScript.
 
 This process allows for automated builds and image management via GitHub Actions and Docker Hub, while giving you control over the deployment timing and configuration on DigitalOcean. 

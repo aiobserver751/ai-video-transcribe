@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "next dev",
     "compile:workers": "tsc -p tsconfig.workers.json",
-    "build": "npm run compile:workers && next build",
+    "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "workers": "tsx scripts/init-workers.ts",
